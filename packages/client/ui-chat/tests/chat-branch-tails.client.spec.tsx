@@ -43,10 +43,12 @@ interface MessageItemProps {
   readonly t: ChatNodeViewProps['t']
   readonly referenceLabels?: readonly string[]
   readonly skillNames?: readonly string[]
+  readonly resend?: (text: string) => void
+  readonly resendUnavailable?: boolean
 }
 
 /** Legacy-node fixture adapter for the independently registered renderers. */
-function MessageItem({ node, t: translate, referenceLabels, skillNames }: MessageItemProps) {
+function MessageItem({ node, t: translate, referenceLabels, skillNames, resend, resendUnavailable }: MessageItemProps) {
   const kind = node.kind === 'assistant' ? 'assistant-step' : node.kind
   const viewNode: ChatConversationViewNode = {
     key: `fixture:${node.kind}:${node.seq}`,
@@ -68,6 +70,8 @@ function MessageItem({ node, t: translate, referenceLabels, skillNames }: Messag
   }
   const props = {
     node: viewNode, t: translate, renderMessageImages, openFile: vi.fn(), openSkill: vi.fn(), useChat: useDetachedChat,
+    ...(resend === undefined ? {} : { resend }),
+    ...(resendUnavailable === undefined ? {} : { resendUnavailable }),
   } as unknown as ChatNodeViewProps
   switch (node.kind) {
     case 'user':
@@ -181,6 +185,51 @@ describe('MessageItem arms', () => {
     expect(screen.queryByRole('button', { name: '编辑' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: '复制' }))
     expect(writeText).toHaveBeenCalledWith('hello bubble')
+  })
+
+  it('user bubbles expose a resend button that forwards the message text', () => {
+    const resend = vi.fn()
+    render(
+      <MessageItem t={t} node={{
+        kind: 'user', seq: 1, time: 1_000,
+        content: [{ type: 'text', text: 'resend me' }] as never,
+        source: null,
+      }}
+      />,
+    )
+    expect(screen.queryByRole('button', { name: '重新发送' })).toBeNull()
+
+    const withResend = render(
+      <MessageItem t={t} node={{
+        kind: 'user', seq: 2, time: 1_000,
+        content: [{ type: 'text', text: 'resend me' }] as never,
+        source: null,
+      }}
+      resend={resend}
+      />,
+    )
+    const button = withResend.getByRole('button', { name: '重新发送' })
+    expect(button).toBeTruthy()
+    fireEvent.click(button)
+    expect(resend).toHaveBeenCalledWith('resend me')
+  })
+
+  it('user bubble resend button is unavailable while the session is running', () => {
+    const resend = vi.fn()
+    const view = render(
+      <MessageItem t={t} node={{
+        kind: 'user', seq: 3, time: 1_000,
+        content: [{ type: 'text', text: 'queued' }] as never,
+        source: null,
+      }}
+      resend={resend}
+      resendUnavailable
+      />,
+    )
+    const button = view.getByRole('button', { name: '重新发送' })
+    expect(button.getAttribute('aria-disabled')).toBe('true')
+    fireEvent.click(button)
+    expect(resend).not.toHaveBeenCalled()
   })
 
   it('user copy falls back to execCommand when clipboard.writeText is unavailable', () => {

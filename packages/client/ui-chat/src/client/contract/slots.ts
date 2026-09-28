@@ -167,6 +167,15 @@ export interface ChatNodeOwnerProps {
   inspectCall: ((callId: ToolCallId) => void) | undefined
   forkAt: (seq: number) => void
   /**
+   * Resend the message text into the owning Session. Present only for user and
+   * steering messages; absent on other node kinds.
+   */
+  resend?: ((text: string) => void) | undefined
+  /**
+   * Whether resend is unavailable because the Session is running.
+   */
+  resendUnavailable?: boolean | undefined
+  /**
    * Session-authorized image loader, down-threaded from the Chat view so a
    * chat-node renderer can render the attachment presentation slot directly
    * with only the durable references plus this loader, instead of receiving a
@@ -256,6 +265,11 @@ export interface ChatViewInjected {
     read: () => ChatScrollPosition | null
   }
   forkAt: (seq: number) => void
+  /**
+   * Resend the given text as a queued user message into the addressed Session.
+   * Disabled (unavailable) when the session is running.
+   */
+  resend: (text: string) => void
   fileMentions: (owner: TurnTailOwnerProps) => MarkdownFileMentions | undefined
 }
 

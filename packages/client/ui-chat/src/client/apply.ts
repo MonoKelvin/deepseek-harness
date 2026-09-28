@@ -256,6 +256,14 @@ export function apply(ctx: Context): void {
                 // Fork or child-title failure leaves the source view unchanged.
               })
           },
+          resend: (text) => {
+            void session.prompt([{ type: 'text', text }], 'queue').then((result) => {
+              if (!result.ok) {
+                // Prompt failures mirror into session.promptError; no additional
+                // surface needed here — the composer already surfaces it.
+              }
+            })
+          },
         }
       },
     }, ChatView)

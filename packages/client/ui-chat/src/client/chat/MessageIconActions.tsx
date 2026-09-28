@@ -1,9 +1,9 @@
 // Shared IconActions chrome for user and assistant messages: copy
-// live, optional branch wiring, and an optional date-aware clock.
+// live, optional resend, optional branch wiring, and an optional date-aware clock.
 
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import {
-  IconBranchOutlineRegular, IconCheckOutlineRegular, IconCopyOutlineRegular, Tooltip, writeClipboard,
+  IconBranchOutlineRegular, IconCheckOutlineRegular, IconCopyOutlineRegular, IconRefreshOutlineRegular, Tooltip, writeClipboard,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ChatViewSlotProps } from '../contract/slots.ts'
 import { formatMessageClock } from './message-chrome.ts'
@@ -21,6 +21,10 @@ export interface MessageIconActionsProps {
   onBranch?: (() => void) | undefined
   /** The message is not a completed transcript tail, so branch stays visible but unavailable. */
   branchUnavailable?: boolean | undefined
+  /** Resend this message into the session; omission hides the resend action. */
+  onResend?: ((text: string) => void) | undefined
+  /** The session is currently running, so resend stays visible but unavailable. */
+  resendUnavailable?: boolean | undefined
   /** Parent layout class composed onto the actions row. */
   className?: string | undefined
   /**
@@ -38,16 +42,17 @@ export interface MessageIconActionsProps {
 }
 
 /**
- * Copy / branch (/ clock) IconActions row shared by user and assistant chrome.
- * @param props - Copy text, event time, clock side, branch callback, className.
+ * Copy / resend / branch (/ clock) IconActions row shared by user and assistant chrome.
+ * @param props - Copy text, event time, clock side, resend and branch callbacks, className.
  * @returns The actions row element.
  */
 export function MessageIconActions({
-  text, time, clock, onBranch, branchUnavailable = false, className,
+  text, time, clock, onBranch, branchUnavailable = false, onResend, resendUnavailable = false, className,
   extraActions, usageAction, t,
 }: MessageIconActionsProps) {
   const day = useCalendarDay()
   const reasonId = useId()
+  const resendReasonId = useId()
   // Same success chrome as CodeBlock: a short check swap after the write,
   // gated so re-clicks during the window neither re-copy nor stack timers.
   const [copied, setCopied] = useState(false)
@@ -82,6 +87,25 @@ export function MessageIconActions({
   return (
     <div className={className === undefined ? css.actions : `${css.actions} ${className}`} data-clock={clock}>
       {clock === 'start' ? clockEl : null}
+      {onResend !== undefined && (
+        <Tooltip label={t('message.resend')} side="bottom">
+          {/* Native disabled buttons do not deliver the hover/focus events Tooltip needs. */}
+          <button
+            type="button"
+            className={css.action}
+            aria-label={t('message.resend')}
+            aria-disabled={resendUnavailable || undefined}
+            aria-describedby={resendUnavailable ? resendReasonId : undefined}
+            data-unavailable={resendUnavailable || undefined}
+            onClick={resendUnavailable ? undefined : () => { onResend(text) }}
+          >
+            <IconRefreshOutlineRegular />
+          </button>
+        </Tooltip>
+      )}
+      {onResend !== undefined && resendUnavailable && (
+        <span id={resendReasonId} className={css.visuallyHidden}>{t('message.resendUnavailable')}</span>
+      )}
       <Tooltip label={copied ? t('copied') : t('copy')} side="bottom">
         <button type="button" className={css.action} aria-label={copied ? t('copied') : t('copy')} onClick={onCopy}>
           {copied ? <IconCheckOutlineRegular /> : <IconCopyOutlineRegular />}
