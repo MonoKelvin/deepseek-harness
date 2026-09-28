@@ -1,0 +1,19 @@
+# Bilingual-pair consistency record for 2026-09-28-model-picker-add-custom-model-entry.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-09-28-model-picker-add-custom-model-entry.md
+/agent-note-one-settings-entry-point-from-the-composer-s-model-picker:
+  en: ba4fb77a948e2e7e
+  zh: da6d0c163bc53393
+/agent-note-one-settings-entry-point-from-the-composer-s-model-picker/problem:
+  en: 635c4ceccfdad47d
+  zh: eaea614d2b49e988
+/agent-note-one-settings-entry-point-from-the-composer-s-model-picker/decision:
+  en: 1cd504a1c36d069f
+  zh: 89b99f1fa6759e1f
+/agent-note-one-settings-entry-point-from-the-composer-s-model-picker/alternatives-considered:
+  en: 507ef34a8e742504
+  zh: 1c5efd7be60e8d38
+/agent-note-one-settings-entry-point-from-the-composer-s-model-picker/consequences:
+  en: 4c7e150c7320a384
+  zh: 1f11930070891bec

@@ -23,4 +23,9 @@ export interface ModelSelectInjected {
    * @returns the Host outcome, or undefined when this Session cannot select a model.
    */
   select: (selection: ModelSelection) => Promise<RemoteResult<void> | undefined>
+  /**
+   * Open Settings on the Models section with its add-provider card expanded,
+   * so a user who finds no suitable model lands straight in the add flow.
+   */
+  openAddModel: () => void
 }

@@ -117,6 +117,14 @@ export interface SettingsHeaderOwnerProps {
 }
 
 /**
+ * Stable ids for the one-shot section intents the shipped registrants honor
+ * (see {@link SettingsSectionOwnerProps.intent}). Never localized: the
+ * navigator and the honoring section match on the same id, and an id no
+ * section honors is simply ignored.
+ */
+export type SettingsSectionIntent = 'models.add-provider'
+
+/**
  * Owner share of a settings section entry. The shell owns modal visibility
  * and navigation; a section's data arrives through its own inject faces and
  * stores. `close` is the one shell affordance a section receives, for flows
@@ -126,6 +134,14 @@ export interface SettingsHeaderOwnerProps {
 export interface SettingsSectionOwnerProps {
   /** Close the settings panel (the shell owns the open state). */
   close: () => void
+  /**
+   * One-shot intent the panel was opened with for this section, named by
+   * `SettingsNavigation.open`. The section owning the requested id decides
+   * what it means and clears it through {@link SettingsSectionOwnerProps.onIntentHandled}.
+   */
+  intent?: SettingsSectionIntent | undefined
+  /** Clear the pending intent once this section has honored it. */
+  onIntentHandled?: (() => void) | undefined
 }
 
 /** Owner share of the currently active settings-backed onboarding step. */

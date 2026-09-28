@@ -20,6 +20,7 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ConnectionIndicatorState } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SettingsRootComponentProps, SettingsSectionRow } from './shell-contract.ts'
+import type { SettingsSectionIntent } from '@deepseek-ai/dsh-client-ui-settings/client'
 import css from './SettingsRoot.module.css'
 import { DesktopUpdateIndicator } from './DesktopUpdateIndicator.tsx'
 
@@ -42,8 +43,10 @@ type PanelProps = {
   rows: readonly SettingsSectionRow[]
   renderSlot: SettingsRootComponentProps['renderSlot']
   activeId: string | undefined
+  intent: SettingsSectionIntent | undefined
   onSelect: (id: string) => void
   onClose: () => void
+  onIntentHandled: () => void
 }
 
 /**
@@ -51,7 +54,7 @@ type PanelProps = {
  * header button, a mask click, and document-level Escape (mounted only while
  * open, so the listener lifetime is the panel's).
  */
-function SettingsPanel({ rows, renderSlot, activeId, onSelect, onClose }: PanelProps) {
+function SettingsPanel({ rows, renderSlot, activeId, intent, onSelect, onClose, onIntentHandled }: PanelProps) {
   // Entries can unmount underneath the requested id, so the render-time
   // projection falls back to the first row when the id is gone.
   const active = rows.find(r => r.id === activeId)?.id ?? rows[0]?.id
@@ -96,7 +99,11 @@ function SettingsPanel({ rows, renderSlot, activeId, onSelect, onClose }: PanelP
             </button>
           </div>
           <div className={css.options}>
-            {active !== undefined && renderSlot('settings.section', { close: onClose }, { only: active })}
+            {active !== undefined && renderSlot(
+              'settings.section',
+              { close: onClose, intent, onIntentHandled },
+              { only: active },
+            )}
           </div>
         </div>
       </div>
@@ -114,9 +121,9 @@ export function SettingsRoot(props: SettingsRootComponentProps) {
     wide, reconnect, useConnectionState, useSections, useOnboardingSteps, useSessions, renderSlot, t,
     useDesktopUpdate, openDesktopUpdate, useStore, actions, useShortcuts,
   } = props
-  const { open, activeId } = useStore(state => state)
+  const { open, activeId, intent } = useStore(state => state)
   const shortcut = useShortcuts(rows => rows.find(row => row.id === 'settings.open'))
-  const { close, openSection } = actions
+  const { close, openSection, clearIntent } = actions
   const [requestedOnboarding, setRequestedOnboarding] = useState<string | undefined>()
   const [completedOnboarding, setCompletedOnboarding] = useState<ReadonlySet<string>>(() => new Set())
   const [showRecovery, setShowRecovery] = useState(false)
@@ -248,8 +255,10 @@ export function SettingsRoot(props: SettingsRootComponentProps) {
           rows={rows}
           renderSlot={renderSlot}
           activeId={activeId}
+          intent={intent}
           onSelect={actions.select}
           onClose={close}
+          onIntentHandled={clearIntent}
         />
       )}
       {/* Dialog chrome and `#root` inert ownership live inside each step's

@@ -29,7 +29,7 @@ import clsx from 'clsx'
 import type { ModelReasoningEffort, ModelSelection } from '@deepseek-ai/dsh-api-remotes/client'
 import {
   IconCheckOutlineRegular, IconChevronDownOutlineRegular, IconChevronRightOutlineRegular,
-  IconDataOutlineRegular, IconWarningOutlineRegular, StateDot, Toast,
+  IconDataOutlineRegular, IconPlusOutlineRegular, IconWarningOutlineRegular, StateDot, Toast,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ModelSelectInjected } from './slots.ts'
@@ -55,7 +55,7 @@ const MEASURE_STYLE: CSSProperties = { visibility: 'hidden', left: 0, top: 0 }
  * @returns the trigger and, while open, the two-level menu.
  */
 export function ModelSelect(
-  { locked, available, directory, load, select, t }:
+  { locked, available, directory, load, select, openAddModel, t }:
   ModelSelectInjected & { locked: boolean } & PropsLocale<'model'>,
 ) {
   const state = useSyncExternalStore(
@@ -76,6 +76,13 @@ export function ModelSelect(
   const menuRef = useRef<HTMLDivElement | null>(null)
   const [menuPos, setMenuPos] = useState<CSSProperties | null>(null)
   const itemRefs = useRef<(HTMLButtonElement | null)[]>([])
+  // The root pane's two cells, addressed by name so the restore below never
+  // depends on their position in the roving-focus order (the add entry leads it).
+  const modelCellRef = useRef<HTMLButtonElement | null>(null)
+  const effortCellRef = useRef<HTMLButtonElement | null>(null)
+  // The card's leading add entry: part of the root pane's roving order, but
+  // not of a drilled list's — its walk cycles that list alone.
+  const addEntryRef = useRef<HTMLButtonElement | null>(null)
   const id = useId()
 
   const groups = useMemo(() => state.groups.toSorted((left, right) =>
@@ -150,14 +157,16 @@ export function ModelSelect(
       // The checked row is the value in use; a pane without one opens on its
       // first row.
       const checked = menuRef.current?.querySelector<HTMLElement>('[role="menuitemradio"][aria-checked="true"]:not([disabled])')
-      const target = checked ?? itemRefs.current.find(item => item !== null && !item.disabled)
+      const rows = itemRefs.current.filter((item): item is HTMLButtonElement =>
+        item !== null && item !== addEntryRef.current && !item.disabled)
+      const target = checked ?? rows[0]
       // Rows a selection in flight disabled cannot take the keyboard; the
       // trigger does, so the card's keys still reach the menu.
       ;(target ?? triggerRef.current)?.focus()
       return
     }
-    const cell = itemRefs.current[intent === 'effort' ? 1 : 0]
-    ;(cell !== null && cell !== undefined && !cell.disabled ? cell : triggerRef.current)?.focus()
+    const cell = intent === 'effort' ? effortCellRef.current : modelCellRef.current
+    ;(cell !== null && !cell.disabled ? cell : triggerRef.current)?.focus()
   }, [open, pane])
 
   // Portaled placement (the Menu primitive's portal rules: fixed from the
@@ -222,7 +231,10 @@ export function ModelSelect(
   }
 
   const moveFocus = (offset: number): void => {
-    const items = itemRefs.current.filter(item => item !== null)
+    const all = itemRefs.current.filter(item => item !== null)
+    // A drilled pane's walk stays inside that pane: the card's leading add
+    // entry belongs to the root pane's list, not to a list it is not part of.
+    const items = pane === 'root' ? all : all.filter(item => item !== addEntryRef.current)
     if (items.length === 0) return
     const active = items.findIndex(item => item === document.activeElement)
     // Focus outside the rows (the trigger, which keeps it while the menu
@@ -348,6 +360,17 @@ export function ModelSelect(
     const at = itemIndex++
     return (node: HTMLButtonElement | null) => { itemRefs.current[at] = node }
   }
+  /** Registers a root cell both in the roving-focus order and in its named restore slot. */
+  const rootCellRef = (kind: 'model' | 'effort') => (node: HTMLButtonElement | null) => {
+    itemRef()(node)
+    if (kind === 'model') modelCellRef.current = node
+    else effortCellRef.current = node
+  }
+  /** Registers the leading add entry in the roving order and in its named slot. */
+  const addEntryBinding = () => (node: HTMLButtonElement | null) => {
+    itemRef()(node)
+    addEntryRef.current = node
+  }
 
   return (
     <div
@@ -400,15 +423,31 @@ export function ModelSelect(
           aria-label={t('menu.aria')}
           aria-busy={state.status === 'loading' || busy}
         >
+          <button
+            ref={addEntryBinding()}
+            type="button"
+            role="menuitem"
+            className={css.addModel}
+            onClick={() => {
+              // Close the card before handing off: Settings mounts its own
+              // modal layer, and leaving this portaled menu open would stack
+              // two overlays on the same anchor row.
+              close()
+              openAddModel()
+            }}
+          >
+            <IconPlusOutlineRegular className={css.addModelIcon} size={14} />
+            <span className={css.addModelLabel}>{t('menu.addCustomModel')}</span>
+          </button>
           {pane === 'root' && (
             <>
-              <button ref={itemRef()} type="button" role="menuitem" className={css.cell} onClick={() => { drill('model') }}>
+              <button ref={rootCellRef('model')} type="button" role="menuitem" className={css.cell} onClick={() => { drill('model') }}>
                 <span className={css.cellLabel}>{t('menu.model')}</span>
                 <span className={css.cellValue}>{modelLabel}</span>
                 <IconChevronRightOutlineRegular className={css.cellChevron} />
               </button>
               {reasoning !== undefined && (
-                <button ref={itemRef()} type="button" role="menuitem" className={css.cell} onClick={() => { drill('effort') }}>
+                <button ref={rootCellRef('effort')} type="button" role="menuitem" className={css.cell} onClick={() => { drill('effort') }}>
                   <span className={css.cellLabel}>{t('menu.effort')}</span>
                   <span className={css.cellValue}>{effortLabel}</span>
                   <IconChevronRightOutlineRegular className={css.cellChevron} />

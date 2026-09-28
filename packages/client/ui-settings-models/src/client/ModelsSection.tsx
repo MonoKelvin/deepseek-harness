@@ -21,16 +21,17 @@
  * post-apply reload.
  */
 
-import { useId, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Button, IconPlusOutlineRegular, Modal, SegmentedControl } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace, PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SettingsNamespaceView } from '@deepseek-ai/dsh-api-remotes/client'
+import type { SettingsSectionIntent, SettingsSectionOwnerProps } from '@deepseek-ai/dsh-client-ui-settings/client'
 // Type-only: pulls this package's SlotMap merge (the two Models child slots).
 import type {} from './slot-contract.ts'
 import { CustomProviderCard } from './CustomProviderCard.tsx'
 import { deriveKeyRef, protocolChoices, providerUsable } from './store.ts'
-import type { ModelsSettingsStore, ProviderRow } from './store.ts'
+import type { ModelsSettingsState, ModelsSettingsStore, ProviderRow } from './store.ts'
 import type { ModelsOperations } from './operations.ts'
 import type { SettingsSchemaOperations } from './schema-operations.ts'
 import { ProviderEditor, type ProviderEditorProps } from './ProviderEditor.tsx'
@@ -72,7 +73,10 @@ type ModelsRenderSlot = PropsRenderSlots<ModelsChildSlots>['renderSlot']
  * call itself — unlike the inject face it is never absent at runtime — and a
  * direct render that forgets it fails to compile instead of mounting nothing.
  */
-export type ModelsSectionProps = Partial<InjectFace<ModelsSectionInjected>> & PropsRenderSlots<ModelsChildSlots>
+export type ModelsSectionProps =
+  Partial<InjectFace<ModelsSectionInjected>>
+  & PropsRenderSlots<ModelsChildSlots>
+  & Partial<Pick<SettingsSectionOwnerProps, 'intent' | 'onIntentHandled'>>
 
 type ModelsSectionFace = InjectFace<ModelsSectionInjected>
 
@@ -203,6 +207,56 @@ function targetOf(row: ProviderRow): EditorTarget {
   }
 }
 
+/** The one-shot intent the composer's model picker sends to land in the add flow. */
+const ADD_PROVIDER_INTENT: SettingsSectionIntent = 'models.add-provider'
+
+/** The add-card inputs derived from the page snapshot. */
+interface AddInputs {
+  /** Dormant directory rows the catalog mode can adopt, in store order. */
+  addable: AddableRow[]
+  /** The hand-declared namespace whose schema names the protocols one may speak. */
+  piAi: SettingsNamespaceView | undefined
+  /** Protocol choices offered by the custom mode. */
+  protocols: ReturnType<typeof protocolChoices>
+  /** Whether the catalog mode is offered (any configurable provider exists). */
+  catalogOffered: boolean
+  /** Whether the catalog mode has a row left to adopt. */
+  catalogEnabled: boolean
+  /** Whether the custom mode is offered (the pi-ai namespace is mounted). */
+  customOffered: boolean
+  /** Whether the custom mode has a protocol to declare. */
+  customEnabled: boolean
+}
+
+/**
+ * Derive the add-card inputs from the page snapshot. Shared by the render
+ * (which gates the entry button) and the picker intent (which must wait for
+ * the same join before it can pick a target).
+ * @param state - the page snapshot (rows joined with namespaces and credentials).
+ * @param schema - settings schema and immutable path callbacks.
+ * @returns the addable rows, the custom-mode namespace and protocols, and the four offer/enable facts.
+ */
+function addInputs(state: ModelsSettingsState, schema: SettingsSchemaOperations): AddInputs {
+  const addable: AddableRow[] = state.rows.flatMap((row) => {
+    const namespace = state.namespaces.get(row.entry.settingsNs)
+    return namespace === undefined || row.configured ? [] : [{ row, namespace }]
+  })
+  // Hand-declared routes live in the pi-ai namespace, which is also the only
+  // one whose schema names the protocols one may speak; without it mounted
+  // there is nothing to declare and the mode is not offered.
+  const piAi = state.namespaces.get('llm-pi-ai')
+  const protocols = protocolChoices(piAi, schema)
+  return {
+    addable,
+    piAi,
+    protocols,
+    catalogOffered: state.rows.some(row => state.namespaces.has(row.entry.settingsNs)),
+    catalogEnabled: addable.length > 0,
+    customOffered: piAi !== undefined,
+    customEnabled: protocols.length > 0,
+  }
+}
+
 /** Stable visible and accessible identity for one provider target. */
 export function providerTargetLabel(target: ProviderIdentity): string {
   return target.provider === target.displayName
@@ -221,19 +275,32 @@ export function providerCopy(template: string, target: ProviderIdentity): string
  * @returns the section, or null while the shell has not injected yet.
  */
 export function ModelsSection(props: ModelsSectionProps): ReactNode {
-  const { controller, useSnapshot, operations, schema, t, renderSlot } = props
+  const { controller, useSnapshot, operations, schema, t, renderSlot, intent, onIntentHandled } = props
   if (
     controller === undefined || useSnapshot === undefined || operations === undefined
     || schema === undefined || t === undefined
   ) return null
-  return <Loaded injected={{ controller, useSnapshot, operations, schema, t }} renderSlot={renderSlot} />
+  return (
+    <Loaded
+      injected={{ controller, useSnapshot, operations, schema, t }}
+      renderSlot={renderSlot}
+      intent={intent}
+      onIntentHandled={onIntentHandled}
+    />
+  )
 }
 
-function Loaded({ injected, renderSlot }: { injected: ModelsSectionFace; renderSlot: ModelsRenderSlot }): ReactNode {
+function Loaded({ injected, renderSlot, intent, onIntentHandled }: {
+  injected: ModelsSectionFace
+  renderSlot: ModelsRenderSlot
+  intent?: SettingsSectionIntent | undefined
+  onIntentHandled?: (() => void) | undefined
+}): ReactNode {
   const { controller, operations, schema, t } = injected
   const snapshot = injected.useSnapshot(value => value)
   const state = { ...snapshot, rows: snapshot.rows.map(row => row.entry.provider === 'deepseek-account'
     ? { ...row, entry: { ...row.entry, displayName: t('deepSeekAccount') } } : row) }
+  const add = addInputs(state, schema)
   const [editing, setEditing] = useState<EditorTarget | undefined>(undefined)
   const [addOpen, setAddOpen] = useState(false)
   const [addMode, setAddMode] = useState<AddMode>('catalog')
@@ -310,6 +377,37 @@ function Loaded({ injected, renderSlot }: { injected: ModelsSectionFace; renderS
       .finally(() => { setDeleting(false) })
   }
 
+  /**
+   * Open the add card the way the entry button does: one mode, one target,
+   * and both panels mounted as their modes are visited.
+   */
+  const openAddCard = (): void => {
+    const first = add.addable[0]
+    const initial: AddMode = add.catalogEnabled ? 'catalog' : 'custom'
+    setSavedTarget(undefined)
+    setEditing(first === undefined ? undefined : targetOf(first.row))
+    setAddMode(initial)
+    setVisited(new Set([initial]))
+    setAddOpen(true)
+  }
+
+  /** The picker intent already honored; reset once the shell clears it, so a later request reopens the card. */
+  const handledIntent = useRef<SettingsSectionIntent | undefined>(undefined)
+  // The composer picker's one-shot intent: land directly in the add flow. It
+  // waits for the same provider/settings/credential join the entry button
+  // waits for, so a page still loading never opens an empty card.
+  useEffect(() => {
+    if (intent === undefined) {
+      handledIntent.current = undefined
+      return
+    }
+    if (intent !== ADD_PROVIDER_INTENT || handledIntent.current === intent) return
+    if (!add.catalogOffered && !add.customOffered) return
+    handledIntent.current = intent
+    openAddCard()
+    onIntentHandled?.()
+  }, [intent, onIntentHandled, add])
+
   if (state.status === 'idle') void controller.load()
   if (state.status === 'error') {
     /* v8 ignore next -- an error status always carries text; the fallback satisfies the nullable type */
@@ -339,26 +437,13 @@ function Loaded({ injected, renderSlot }: { injected: ModelsSectionFace; renderS
   // step: whether the user already has a provider to talk to.
   const anyUsable = state.rows.some(providerUsable)
   const configured = state.rows.filter(row => row.configured)
-  const configurable = state.rows.filter(row => state.namespaces.has(row.entry.settingsNs))
-  const addable: AddableRow[] = state.rows.flatMap((row) => {
-    const namespace = state.namespaces.get(row.entry.settingsNs)
-    return namespace === undefined || row.configured ? [] : [{ row, namespace }]
-  })
-  // Hand-declared routes live in the pi-ai namespace, which is also the only
-  // one whose schema names the protocols one may speak; without it mounted
-  // there is nothing to declare and the mode is not offered.
-  const piAi = state.namespaces.get('llm-pi-ai')
-  const protocols = protocolChoices(piAi, schema)
   // Each mode is offered while its namespace is mounted and enabled while it
   // has something to offer; the card shows the chosen mode where both are
   // offered, else the only one there is. A mode's panel is mounted while it is
   // the shown mode or has been shown since the card opened — derived, so a
   // refresh that changes which modes are offered can never leave the card
   // without a panel.
-  const catalogOffered = configurable.length > 0
-  const catalogEnabled = addable.length > 0
-  const customOffered = piAi !== undefined
-  const customEnabled = protocols.length > 0
+  const { addable, piAi, protocols, catalogOffered, catalogEnabled, customOffered, customEnabled } = add
   const bothOffered = catalogOffered && customOffered
   const mode: AddMode = bothOffered ? addMode : customOffered ? 'custom' : 'catalog'
   const mounted = (candidate: AddMode): boolean => mode === candidate || visited.has(candidate)
@@ -647,15 +732,7 @@ function Loaded({ injected, renderSlot }: { injected: ModelsSectionFace; renderS
                   type="button"
                   className={styles['addButton']}
                   disabled={!state.writable || (!catalogEnabled && !customEnabled)}
-                  onClick={() => {
-                    const first = addable[0]
-                    const initial: AddMode = catalogEnabled ? 'catalog' : 'custom'
-                    setSavedTarget(undefined)
-                    setEditing(first === undefined ? undefined : targetOf(first.row))
-                    setAddMode(initial)
-                    setVisited(new Set([initial]))
-                    setAddOpen(true)
-                  }}
+                  onClick={openAddCard}
                 >
                   <IconPlusOutlineRegular size={14} />
                   {t('add')}
