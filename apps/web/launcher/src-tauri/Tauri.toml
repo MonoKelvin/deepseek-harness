@@ -6,8 +6,8 @@ main-binary-name = "dsh-web-launcher"
 [build]
 dev-url = "http://localhost:5173"
 frontend-dist = "../dist"
-before-dev-command = "npx vite"
-before-build-command = "npx vite build"
+before-dev-command = "scripts\\vite-dev.bat"
+before-build-command = "scripts\\vite-build.bat"
 
 [app]
 with-global-tauri = true
