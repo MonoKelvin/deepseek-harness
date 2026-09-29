@@ -68,11 +68,14 @@ function MessageItem({ node, t: translate, referenceLabels, skillNames, resend, 
         }
         : node,
   }
-  const props = {
+  const base = {
     node: viewNode, t: translate, renderMessageImages, openFile: vi.fn(), openSkill: vi.fn(), useChat: useDetachedChat,
+  } as unknown as ChatNodeViewProps
+  const props = {
+    ...base,
     ...(resend === undefined ? {} : { resend }),
     ...(resendUnavailable === undefined ? {} : { resendUnavailable }),
-  } as unknown as ChatNodeViewProps
+  }
   switch (node.kind) {
     case 'user':
     case 'steering':

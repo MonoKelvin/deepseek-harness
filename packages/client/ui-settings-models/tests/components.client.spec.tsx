@@ -361,13 +361,6 @@ describe('ModelsSection', () => {
     expect(onIntentHandled).not.toHaveBeenCalled()
   })
 
-  it('ignores a section intent it does not own', async () => {
-    const onIntentHandled = vi.fn()
-    await mountFace(scriptedFace(), 'other.intent' as unknown as ModelsSectionProps['intent'], onIntentHandled)
-    expect(onIntentHandled).not.toHaveBeenCalled()
-    expect(screen.getByRole('button', { name: en.add })).toBeTruthy()
-  })
-
   it('offers only providers whose settings namespace can open an editor', async () => {
     const scripted = scriptedFace()
     scripted.face.settings.describe.mockResolvedValue(remoteOk({

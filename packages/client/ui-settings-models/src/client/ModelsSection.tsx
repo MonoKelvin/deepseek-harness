@@ -207,9 +207,6 @@ function targetOf(row: ProviderRow): EditorTarget {
   }
 }
 
-/** The one-shot intent the composer's model picker sends to land in the add flow. */
-const ADD_PROVIDER_INTENT: SettingsSectionIntent = 'models.add-provider'
-
 /** The add-card inputs derived from the page snapshot. */
 interface AddInputs {
   /** Dormant directory rows the catalog mode can adopt, in store order. */
@@ -401,7 +398,7 @@ function Loaded({ injected, renderSlot, intent, onIntentHandled }: {
       handledIntent.current = undefined
       return
     }
-    if (intent !== ADD_PROVIDER_INTENT || handledIntent.current === intent) return
+    if (handledIntent.current === intent) return
     if (!add.catalogOffered && !add.customOffered) return
     handledIntent.current = intent
     openAddCard()
