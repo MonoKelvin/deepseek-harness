@@ -2,27 +2,48 @@
 
 English | [中文](README.zh.md)
 
-Double-click `dsh-web.lnk` (or right-click → "Pin to taskbar") to start the DeepSeek Harness Web interface (`pnpm dsh web`); the default browser opens once the server is ready.
+A standalone Tauri GUI application for managing the DeepSeek Harness web development server lifecycle.
 
 ## Directory contents
 
-- `launch.bat` — launch script. Switches to the repository root, installs dependencies and builds the frontend as needed, detects the port (default `3080`), and starts `pnpm dsh web`.
-- `dsh-web.ico` — taskbar / shortcut icon (rounded-rectangle background).
-- `create-shortcut.ps1` — rebuilds the `dsh-web.lnk` shortcut on this machine (the `.lnk` holds absolute paths, so rerun this script on another computer).
-- `dsh-web.lnk` — the generated shortcut, **already in `.gitignore` and never committed**.
+- `package.json` — Node.js project manifest with React frontend and Tauri build scripts
+- `src/` — React frontend source code
+- `public/` — Static assets
+- `src-tauri/` — Rust/Tauri backend source code
+- `tsconfig.json` — TypeScript configuration
+- `vite.config.ts` — Vite build configuration
+- `tailwind.config.cjs` — Tailwind CSS configuration
 
 ## Usage
 
-1. Double-click `dsh-web.lnk` directly.
-2. Pin to the taskbar: right-click `dsh-web.lnk` → "Pin to taskbar".
+This launcher provides a graphical interface to manage the dsh web server:
 
-## After moving computers or changing the path
+1. **Install dependencies** — Click "Install" to run `pnpm install`
+2. **Build frontend** — Click "Build" to compile the web frontend
+3. **Start server** — Click "Start" to launch `pnpm dsh web` on port 3080
+4. **Stop server** — Click "Stop" to terminate the running server
+5. **Restart server** — Click "Restart" to restart the server
 
-The repository does not store the `.lnk` (its absolute path depends on this machine). On a new machine:
+The application automatically detects if a server is already running on port 3080 and opens the existing instance.
 
-- Enter this directory, right-click `create-shortcut.ps1` → "Run with PowerShell", which regenerates `dsh-web.lnk` for the current path.
+## Development
+
+```bash
+# Install dependencies
+pnpm install
+
+# Development mode
+pnpm dev
+
+# Build frontend
+pnpm run build
+
+# Build Tauri app (requires Rust)
+pnpm tauri build
+```
 
 ## Notes
 
-- `dsh web` listens on `http://127.0.0.1:3080` by default and opens the browser once ready; closing the launch window stops the server.
-- If the port is already in use, the launcher opens the existing page instead of starting the server again.
+- `dsh web` listens on `http://127.0.0.1:3080` by default
+- The launcher manages server processes through the Tauri backend
+- Closing the app window does not stop the running server

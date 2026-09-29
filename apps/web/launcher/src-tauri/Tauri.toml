@@ -1,0 +1,36 @@
+product-name = "dsh-web-launcher"
+version = "0.1.0"
+identifier = "com.deepseek.harness.web-launcher"
+main-binary-name = "dsh-web-launcher"
+
+[build]
+dev-url = "http://localhost:5173"
+frontend-dist = "../dist"
+before-dev-command = "npx vite"
+before-build-command = "npx vite build"
+
+[app]
+with-global-tauri = true
+
+[[app.windows]]
+url = "index.html"
+label = "main"
+width = 800
+height = 450
+min-width = 800
+min-height = 450
+resizable = false
+fullscreen = false
+maximized = false
+minimizable = false
+title = "dsh Web Launcher"
+decorations = false
+transparent = true
+drag-drop-enabled = false
+
+[app.security]
+csp = "default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' http://127.0.0.1:3080"
+
+[bundle]
+targets = "msi"
+icon = ["icons/icon-128.png"]
