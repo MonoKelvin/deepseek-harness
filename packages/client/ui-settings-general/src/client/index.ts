@@ -98,7 +98,7 @@ export function apply(ctx: ClientContext): void {
       }),
     }, DataDirectoryRow))
   }
-  // Last row: every feature-registered preference row orders below 100.
+  // Version information follows the core preferences and data-directory row.
   ctx.slots.inject('settings.general.item', () => ctx.slots.register({
     name: 'settings.general.item', id: 'current-version', order: 100, locale: NS,
   }, CurrentVersionRow))
