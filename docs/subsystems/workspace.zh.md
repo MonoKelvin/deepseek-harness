@@ -391,6 +391,14 @@ Host service backing the generated `ctx.remote.workspace` namespace.
 @Remote('unarchiveSession') unarchiveSession(request: WorkspaceUnarchiveSessionRequest): Promise<WorkspaceArchiveValue>
 
 /**
+ * Permanently delete one Session's stored data. Irreversible; a Session with
+ * running work is refused until its work is stopped.
+ * @param request - Session identity to delete.
+ * @returns the deletion receipt.
+ */
+@Remote('deleteSession') deleteSession(request: WorkspaceDeleteSessionRequest): Promise<WorkspaceDeleteSessionValue>
+
+/**
  * Surface one known unarchived Session ahead of unpinned Sessions.
  * @param request - Session identity to pin.
  * @returns the complete resulting pin set, most recently pinned first.
@@ -573,6 +581,27 @@ archiveSession(sessionId: SessionId, options: ArchiveSessionOptions = {}): Promi
 unarchiveSession(sessionId: SessionId): Promise<void>
 
 /**
+ * Permanently delete one session: its stored event log and every derived
+ * view of it. The session must exist (live or in session persistence) and
+ * must be inactive — the `workspace/session-activity` waterfall is asked
+ * once, and any reported activity rejects with
+ * {@link WorkspaceActiveSessionError} before anything is deleted, so a
+ * running session is never removed underneath its own work. The stored data
+ * is deleted through `sessionPersistence.delete`, the id is dropped from the
+ * archive and pin sets in one durable write, and its header leaves the
+ * registry index so grouping surfaces stop accounting it. The
+ * `workspace/session-delete` providers then relay the removal to their own
+ * views (the session-controller drops the client-facing row). Deleting a
+ * session that persistence no longer holds still cleans the registry sets
+ * and index. This is irreversible: no unarchive restores a deleted session.
+ * @param sessionId - The session to delete.
+ * @returns resolution after the stored data is gone and the registry write is durable.
+ * @throws {WorkspaceUnknownSessionError} when no such session exists.
+ * @throws {WorkspaceActiveSessionError} when the session is active.
+ */
+deleteSession(sessionId: SessionId): Promise<void>
+
+/**
  * Pin one session durably, prepending it to the registry-global pin set.
  * The session must exist (live or in session persistence) and must not be
  * archived. An already pinned id resolves without writing or reordering.
@@ -627,6 +656,29 @@ Ask the composed providers what still runs for a session before it is archived. 
  * @mode waterfall
  */
 'workspace/session-activity'( request: SessionActivityRequest, next: () => Promise<readonly SessionActivity[]>, ): Promise<readonly SessionActivity[]>
+```
+
+Source: [`packages/workspace/workspace/src/index.ts`](../../packages/workspace/workspace/src/index.ts)
+
+<a id="workspacesession-delete--parallel"></a>
+
+#### `workspace/session-delete` — parallel
+
+A session's stored data was permanently deleted from session persistence; the deletion is durable when this dispatches. Listeners drop their own view of the id — the session-controller relays the client-facing removal, and any owner holding derived state for the id discards it. A rejection is logged by the registry and does not undo the deletion. Deletion is refused while the session is active, so no running work observes this.
+
+```ts cordis-catalog
+/**
+ * A session's stored data was permanently deleted from session
+ * persistence; the deletion is durable when this dispatches. Listeners
+ * drop their own view of the id — the session-controller relays the
+ * client-facing removal, and any owner holding derived state for the id
+ * discards it. A rejection is logged by the registry and does not undo the
+ * deletion. Deletion is refused while the session is active, so no running
+ * work observes this.
+ * @param request - the session whose data was deleted.
+ * @mode parallel
+ */
+'workspace/session-delete'(request: SessionActivityRequest): Promise<void> | void
 ```
 
 Source: [`packages/workspace/workspace/src/index.ts`](../../packages/workspace/workspace/src/index.ts)

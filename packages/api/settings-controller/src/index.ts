@@ -9,8 +9,15 @@
 
 import { Context } from '@deepseek-ai/cordis'
 import {
+  canOpenNativePath,
   openNativeTextFile,
+  revealNativePath,
 } from '@deepseek-ai/dsh-native-command'
+import {
+  migrateDataDirectory as migrateDataDirectoryHome,
+  resolveDshHome,
+  type DataDirectoryMigration,
+} from '@deepseek-ai/dsh-home-paths'
 import type { SettingsDescriptor, SettingsPathOp, SettingsForms } from '@deepseek-ai/dsh-settings'
 import type {
   SettingsDescribeValue, SettingsNamespaceView, SettingsPathOpView,
@@ -19,7 +26,12 @@ import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typer
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import { z } from 'zod'
 import { CredentialsController } from './credentials.ts'
-import type { SettingsDocumentOpenValue } from './types.ts'
+import type {
+  DataDirectoryDescribeValue,
+  DataDirectoryMigrateValue,
+  DataDirectoryOpenValue,
+  SettingsDocumentOpenValue,
+} from './types.ts'
 
 export { CredentialsController } from './credentials.ts'
 export type * from './types.ts'
@@ -35,6 +47,12 @@ function isAborted(signal: AbortSignal): boolean {
 export interface SettingsControllerInternals {
   /** Host text-editor integration used to open the settings document. */
   readonly openTextFile?: (path: string, signal: AbortSignal) => Promise<void>
+  /** Host file-manager integration used to open the data directory. */
+  readonly openDirectory?: (path: string, signal: AbortSignal) => Promise<void>
+  /** Whether the Host can reach a native file manager for the data directory. */
+  readonly canOpenDirectory?: () => boolean
+  /** Relocation engine; copies the current data directory and records the move. */
+  readonly migrate?: (target: string) => DataDirectoryMigration
 }
 
 /**
@@ -75,16 +93,23 @@ declare module '@deepseek-ai/cordis' {
  */
 export class SettingsController extends TypertRemoteService {
   private readonly openTextFile: (path: string, signal: AbortSignal) => Promise<void>
+  private readonly openDirectory: (path: string, signal: AbortSignal) => Promise<void>
+  private readonly canOpenDirectory: () => boolean
+  private readonly migrate: (target: string) => DataDirectoryMigration
 
   /**
    * Register the settings namespace and mount the credentials namespace beside
    * it. Both namespaces stay registered when a provider is absent so calls can
    * return the configuration API's actionable missing-provider diagnostic.
    * @param ctx - Host context where settings and credential providers may be mounted.
+   * @param internals - Host integrations replaced by unit tests.
    */
   constructor(ctx: Context, internals: SettingsControllerInternals = {}) {
     super(ctx, 'settingsController', { namespace: 'settings' })
     this.openTextFile = internals.openTextFile ?? openNativeTextFile
+    this.openDirectory = internals.openDirectory ?? revealNativePath
+    this.canOpenDirectory = internals.canOpenDirectory ?? (() => canOpenNativePath())
+    this.migrate = internals.migrate ?? (target => migrateDataDirectoryHome(target))
     ctx.plugin(CredentialsController)
   }
 
@@ -182,6 +207,61 @@ export class SettingsController extends TypertRemoteService {
       if (isAborted(signal)) throw new RemoteError('gateway/cancelled', 'settings document open was aborted', {})
       throw new RemoteError('gateway/internal', `path open failed: ${messageOf(error)}`, {}, { cause: error })
     }
+  }
+
+  /**
+   * Report the data directory the Host currently resolves as `$DSH_HOME`.
+   * @returns the absolute data-directory path and whether it can be revealed.
+   */
+  @Remote
+  describeDataDirectory(): DataDirectoryDescribeValue {
+    return { path: resolveDshHome(), canOpen: this.canOpenDirectory() }
+  }
+
+  /**
+   * Reveal the current data directory in the Host's native file manager.
+   * @param signal - caller lifetime; abort terminates the native command.
+   * @returns confirmation after the file manager accepts the directory.
+   * @throws RemoteError when no file manager is available or opening fails.
+   */
+  @Remote
+  async openDataDirectory(signal: AbortSignal): Promise<DataDirectoryOpenValue> {
+    if (isAborted(signal)) throw new RemoteError('gateway/cancelled', 'data directory open was aborted', {})
+    if (!this.canOpenDirectory()) {
+      throw new RemoteError('gateway/internal', 'no native file manager is available on this host', {})
+    }
+    try {
+      await this.openDirectory(resolveDshHome(), signal)
+      return { opened: true }
+    } catch (error: unknown) {
+      if (isAborted(signal)) throw new RemoteError('gateway/cancelled', 'data directory open was aborted', {})
+      throw new RemoteError('gateway/internal', `data directory open failed: ${messageOf(error)}`, {}, { cause: error })
+    }
+  }
+
+  /**
+   * Copy the current data directory to a chosen location and stage the move.
+   *
+   * The previous directory is deleted only on the next launch, after the copy
+   * is verified, so a failed copy never destroys the current data. The caller
+   * must restart dsh for the new directory to take effect.
+   * @param target - chosen destination directory, absolute or `~`-prefixed.
+   * @returns the staged target and the required-restart flag.
+   * @throws RemoteError when the target is invalid or the copy fails.
+   */
+  @Remote
+  migrateDataDirectory(target: string): DataDirectoryMigrateValue {
+    const parsed = z.string().trim().min(1).safeParse(target)
+    if (!parsed.success) {
+      throw new RemoteError('gateway/bad-request', 'data directory target must be a non-empty path', { issues: parsed.error.issues })
+    }
+    let migration: DataDirectoryMigration
+    try {
+      migration = this.migrate(parsed.data)
+    } catch (error: unknown) {
+      throw new RemoteError('gateway/bad-request', `data directory migration failed: ${messageOf(error)}`, {}, { cause: error })
+    }
+    return { target: migration.target, restartRequired: true }
   }
 
   private async write(

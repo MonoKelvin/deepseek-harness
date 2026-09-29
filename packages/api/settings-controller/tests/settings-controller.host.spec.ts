@@ -17,6 +17,7 @@ describe('settings Remote', () => {
     expect(controller.typertRemote.namespace).toBe('settings')
     expect(remoteMethods(controller).map(method => method.method)).toEqual([
       'describe', 'update', 'replace', 'mutate', 'openSettingsDocument',
+      'describeDataDirectory', 'openDataDirectory', 'migrateDataDirectory',
     ])
     expect(ctx.get('credentialsController')).toBeDefined()
   })
@@ -73,6 +74,49 @@ describe('settings Remote', () => {
     expect(openTextFile).not.toHaveBeenCalled()
   })
 
+})
+
+describe('data directory Remote', () => {
+  it('describes the resolved directory and opens it in the file manager', async () => {
+    const { ctx } = await configurationFixture()
+    const openDirectory = vi.fn(async (_path: string, _signal: AbortSignal) => {})
+    const controller = new SettingsController(ctx, { openDirectory, canOpenDirectory: () => true })
+    const described = controller.describeDataDirectory()
+    expect(described.canOpen).toBe(true)
+    expect(described.path.length).toBeGreaterThan(0)
+    const abort = new AbortController()
+    expect(await controller.openDataDirectory(abort.signal)).toEqual({ opened: true })
+    expect(openDirectory).toHaveBeenCalledWith(described.path, abort.signal)
+  })
+
+  it('reports an absent file manager and contains open failures and cancellation', async () => {
+    const unavailableCtx = (await configurationFixture()).ctx
+    const openDirectory = vi.fn(async (_path: string, _signal: AbortSignal) => {})
+    const unavailable = new SettingsController(unavailableCtx, { openDirectory, canOpenDirectory: () => false })
+    expect(unavailable.describeDataDirectory().canOpen).toBe(false)
+    await expect(unavailable.openDataDirectory(new AbortController().signal)).rejects.toMatchObject({ code: 'gateway/internal' })
+
+    const controller = new SettingsController((await configurationFixture()).ctx, { openDirectory, canOpenDirectory: () => true })
+    const aborted = new AbortController()
+    aborted.abort()
+    await expect(controller.openDataDirectory(aborted.signal)).rejects.toMatchObject({ code: 'gateway/cancelled' })
+    openDirectory.mockRejectedValueOnce(new Error('no file manager'))
+    await expect(controller.openDataDirectory(new AbortController().signal)).rejects.toMatchObject({ code: 'gateway/internal' })
+    const during = new AbortController()
+    openDirectory.mockImplementationOnce(async () => { during.abort(); throw new Error('cancelled during open') })
+    await expect(controller.openDataDirectory(during.signal)).rejects.toMatchObject({ code: 'gateway/cancelled' })
+  })
+
+  it('stages a migration and rejects a blank target or a failed copy', async () => {
+    const { ctx } = await configurationFixture()
+    const migrate = vi.fn((target: string) => ({ previous: '/old', target }))
+    const controller = new SettingsController(ctx, { migrate })
+    expect(controller.migrateDataDirectory('/new/home')).toEqual({ target: '/new/home', restartRequired: true })
+    expect(migrate).toHaveBeenCalledWith('/new/home')
+    expect(() => controller.migrateDataDirectory('   ')).toThrow()
+    migrate.mockImplementationOnce(() => { throw new Error('cross-device copy failed') })
+    expect(() => controller.migrateDataDirectory('/new/home')).toThrow()
+  })
 })
 
 it('omits absent optional descriptor fields and contains primitive write failures', async () => {

@@ -387,6 +387,70 @@ export function runPersistenceContract(name: string, make: () => Promise<Contrac
       }
     })
 
+    it('delete removes a materialized session for this and a fresh instance', async () => {
+      const backend = await make()
+      try {
+        const m = meta('delete-materialized', '/work')
+        const writer = await backend.persistence.create(m)
+        await writer.append(oneTurnLog())
+        await writer.flush()
+        await writer.close()
+
+        await backend.persistence.delete(m.id)
+        expect(await backend.persistence.stat(m.id)).toBeUndefined()
+        expect((await backend.persistence.list()).map(s => s.header.id)).not.toContain(m.id)
+        await expect(backend.persistence.open(m.id, 'read')).rejects.toBeInstanceOf(SessionPersistenceNotFoundError)
+
+        if (backend.reopen !== undefined) {
+          const reopened = await backend.reopen()
+          try {
+            expect(await reopened.persistence.stat(m.id)).toBeUndefined()
+            expect((await reopened.persistence.list()).map(s => s.header.id)).not.toContain(m.id)
+          } finally {
+            await reopened.dispose()
+          }
+        }
+      } finally {
+        await backend.dispose()
+      }
+    })
+
+    it('delete is idempotent for an absent session and frees the id for recreation', async () => {
+      const { persistence, dispose } = await make()
+      try {
+        await expect(persistence.delete(SessionId('never-stored'))).resolves.toBeUndefined()
+
+        const m = meta('delete-recreate', '/work')
+        const writer = await persistence.create(m)
+        await writer.append(oneTurnLog())
+        await writer.flush()
+        await writer.close()
+        await persistence.delete(m.id)
+
+        const recreated = await persistence.create(m)
+        await recreated.append(oneTurnLog())
+        await recreated.close()
+        expect((await persistence.stat(m.id))?.header).toMatchObject(m)
+      } finally {
+        await dispose()
+      }
+    })
+
+    it('delete drops a created-but-unmaterialized session and frees the id', async () => {
+      const { persistence, dispose } = await make()
+      try {
+        const m = meta('delete-open-writer', '/work')
+        const creator = await persistence.create(m)
+        // A live write handle (here the creator) blocks deletion: the caller
+        // must close it first, or the writer could recreate the artifact.
+        await expect(persistence.delete(m.id)).rejects.toBeInstanceOf(SessionAlreadyOwnedError)
+        await creator.close()
+      } finally {
+        await dispose()
+      }
+    })
+
+
     it('flush materializes an empty session durably for a fresh instance', async () => {
       const backend = await make()
       try {

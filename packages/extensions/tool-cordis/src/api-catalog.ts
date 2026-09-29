@@ -2112,6 +2112,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         parameters: [{ name: 'options', description: 'optional cancellation.' }],
         returns: 'one snapshot per stored session.',
       },
+      {
+        signature: 'abstract delete(id: SessionId, options?: SessionPersistenceDeleteOptions): Promise<void>',
+        description: 'Permanently delete one stored session and every physical artifact the backend holds for it. The deletion is irreversible: the event log, its detached header metadata, and any backend-local caches for the id are removed, so a later `stat`/`open` observes the session as never having existed.\n\nThe caller owns single-writer safety: no live write handle for the id may be open, and no in-process write may materialize the session after this resolves, or the backend can recreate the artifact. Deleting an id that does not exist resolves without error — deletion is idempotent — but a storage fault while removing an existing session propagates as itself.',
+        parameters: [{ name: 'id', description: 'the stored session to delete.' }, { name: 'options', description: 'optional cancellation.' }],
+        returns: 'resolution once every artifact for the id is removed.',
+      },
     ],
   },
   {
@@ -2570,6 +2576,26 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         parameters: [{ name: 'signal', description: 'caller lifetime; abort terminates preparation or the native command.' }],
         returns: 'confirmation after the native opener accepts the document.',
         throws: ['RemoteError when no document exists, preparation fails, or opening fails.'],
+      },
+      {
+        signature: '@Remote describeDataDirectory(): DataDirectoryDescribeValue',
+        description: 'Report the data directory the Host currently resolves as `$DSH_HOME`.',
+        parameters: [],
+        returns: 'the absolute data-directory path and whether it can be revealed.',
+      },
+      {
+        signature: '@Remote async openDataDirectory(signal: AbortSignal): Promise<DataDirectoryOpenValue>',
+        description: 'Reveal the current data directory in the Host\'s native file manager.',
+        parameters: [{ name: 'signal', description: 'caller lifetime; abort terminates the native command.' }],
+        returns: 'confirmation after the file manager accepts the directory.',
+        throws: ['RemoteError when no file manager is available or opening fails.'],
+      },
+      {
+        signature: '@Remote migrateDataDirectory(target: string): DataDirectoryMigrateValue',
+        description: 'Copy the current data directory to a chosen location and stage the move.\n\nThe previous directory is deleted only on the next launch, after the copy is verified, so a failed copy never destroys the current data. The caller must restart dsh for the new directory to take effect.',
+        parameters: [{ name: 'target', description: 'chosen destination directory, absolute or `~`-prefixed.' }],
+        returns: 'the staged target and the required-restart flag.',
+        throws: ['RemoteError when the target is invalid or the copy fails.'],
       },
     ],
   },
@@ -3597,6 +3623,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the complete resulting archive set.',
       },
       {
+        signature: '@Remote(\'deleteSession\') deleteSession(request: WorkspaceDeleteSessionRequest): Promise<WorkspaceDeleteSessionValue>',
+        description: 'Permanently delete one Session\'s stored data. Irreversible; a Session with running work is refused until its work is stopped.',
+        parameters: [{ name: 'request', description: 'Session identity to delete.' }],
+        returns: 'the deletion receipt.',
+      },
+      {
         signature: '@Remote(\'pinSession\') pinSession(request: WorkspacePinSessionRequest): Promise<WorkspacePinValue>',
         description: 'Surface one known unarchived Session ahead of unpinned Sessions.',
         parameters: [{ name: 'request', description: 'Session identity to pin.' }],
@@ -3706,6 +3738,13 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Unarchive one session durably by dropping it from the registry-global archive set; the accounting slot was never touched, so the session returns to its recorded position. Unarchiving runs no session-existence check because removing an id cannot introduce an unknown one, so an entry whose session is gone still resolves. An id that is not archived resolves without writing.',
         parameters: [{ name: 'sessionId', description: 'The session to unarchive.' }],
         returns: 'resolution after durability.',
+      },
+      {
+        signature: 'deleteSession(sessionId: SessionId): Promise<void>',
+        description: 'Permanently delete one session: its stored event log and every derived view of it. The session must exist (live or in session persistence) and must be inactive — the `workspace/session-activity` waterfall is asked once, and any reported activity rejects with WorkspaceActiveSessionError before anything is deleted, so a running session is never removed underneath its own work. The stored data is deleted through `sessionPersistence.delete`, the id is dropped from the archive and pin sets in one durable write, and its header leaves the registry index so grouping surfaces stop accounting it. The `workspace/session-delete` providers then relay the removal to their own views (the session-controller drops the client-facing row). Deleting a session that persistence no longer holds still cleans the registry sets and index. This is irreversible: no unarchive restores a deleted session.',
+        parameters: [{ name: 'sessionId', description: 'The session to delete.' }],
+        returns: 'resolution after the stored data is gone and the registry write is durable.',
+        throws: ['{WorkspaceUnknownSessionError} when no such session exists.', '{WorkspaceActiveSessionError} when the session is active.'],
       },
       {
         signature: 'pinSession(sessionId: SessionId): Promise<void>',
@@ -4372,6 +4411,14 @@ export const EVENT_API: readonly EventApiEntry[] = [
     parameters: [{ name: 'request', description: 'the session about to be archived.' }, { name: 'next', description: 'delegate to the remaining providers.' }],
   },
   {
+    name: 'workspace/session-delete',
+    mode: 'parallel',
+    signature: '\'workspace/session-delete\'(request: SessionActivityRequest): Promise<void> | void',
+    summary: 'A session\'s stored data was permanently deleted from session persistence; the deletion is durable when this dispatches.',
+    description: 'A session\'s stored data was permanently deleted from session persistence; the deletion is durable when this dispatches. Listeners drop their own view of the id — the session-controller relays the client-facing removal, and any owner holding derived state for the id discards it. A rejection is logged by the registry and does not undo the deletion. Deletion is refused while the session is active, so no running work observes this.',
+    parameters: [{ name: 'request', description: 'the session whose data was deleted.' }],
+  },
+  {
     name: 'workspace/session-stop',
     mode: 'parallel',
     signature: '\'workspace/session-stop\'(request: SessionActivityRequest): Promise<void> | void',
@@ -4982,6 +5029,18 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'DailyScheduleRecord',
     declaration: 'export interface DailyScheduleRecord {\n    readonly id: ScheduleId;\n    readonly kind: \'daily\';\n    readonly title: string;\n    readonly prompt: string;\n    readonly time: string;\n    readonly timeZone: string;\n    readonly scheduledAt: string;\n}',
+  },
+  {
+    name: 'DataDirectoryDescribeValue',
+    declaration: 'export interface DataDirectoryDescribeValue {\n    readonly path: string;\n    readonly canOpen: boolean;\n}',
+  },
+  {
+    name: 'DataDirectoryMigrateValue',
+    declaration: 'export interface DataDirectoryMigrateValue {\n    readonly target: string;\n    readonly restartRequired: true;\n}',
+  },
+  {
+    name: 'DataDirectoryOpenValue',
+    declaration: 'export interface DataDirectoryOpenValue {\n    readonly opened: true;\n}',
   },
   {
     name: 'DeepSeekLlmApiExtensionMap',
@@ -6688,6 +6747,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface SessionPersistenceCreateOptions {\n    readonly signal?: AbortSignal;\n    readonly inheritedEventCount?: SessionLogOffset;\n}',
   },
   {
+    name: 'SessionPersistenceDeleteOptions',
+    declaration: 'export interface SessionPersistenceDeleteOptions {\n    readonly signal?: AbortSignal;\n}',
+  },
+  {
     name: 'SessionPersistenceListOptions',
     declaration: 'export interface SessionPersistenceListOptions {\n    readonly signal?: AbortSignal;\n}',
   },
@@ -8026,6 +8089,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'WorkspaceDeleteRequest',
     declaration: 'export interface WorkspaceDeleteRequest {\n    readonly workspaceId: WorkspaceId;\n}',
+  },
+  {
+    name: 'WorkspaceDeleteSessionRequest',
+    declaration: 'export interface WorkspaceDeleteSessionRequest {\n    readonly sessionId: SessionId;\n}',
+  },
+  {
+    name: 'WorkspaceDeleteSessionValue',
+    declaration: 'export interface WorkspaceDeleteSessionValue {\n    readonly deleted: true;\n}',
   },
   {
     name: 'WorkspaceDeleteValue',

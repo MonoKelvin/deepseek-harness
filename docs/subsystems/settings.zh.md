@@ -126,6 +126,32 @@ Host service backing the generated `ctx.remote.settings` namespace. Every remote
  * @throws RemoteError when no document exists, preparation fails, or opening fails.
  */
 @Remote async openSettingsDocument(signal: AbortSignal): Promise<SettingsDocumentOpenValue>
+
+/**
+ * Report the data directory the Host currently resolves as `$DSH_HOME`.
+ * @returns the absolute data-directory path and whether it can be revealed.
+ */
+@Remote describeDataDirectory(): DataDirectoryDescribeValue
+
+/**
+ * Reveal the current data directory in the Host's native file manager.
+ * @param signal - caller lifetime; abort terminates the native command.
+ * @returns confirmation after the file manager accepts the directory.
+ * @throws RemoteError when no file manager is available or opening fails.
+ */
+@Remote async openDataDirectory(signal: AbortSignal): Promise<DataDirectoryOpenValue>
+
+/**
+ * Copy the current data directory to a chosen location and stage the move.
+ *
+ * The previous directory is deleted only on the next launch, after the copy
+ * is verified, so a failed copy never destroys the current data. The caller
+ * must restart dsh for the new directory to take effect.
+ * @param target - chosen destination directory, absolute or `~`-prefixed.
+ * @returns the staged target and the required-restart flag.
+ * @throws RemoteError when the target is invalid or the copy fails.
+ */
+@Remote migrateDataDirectory(target: string): DataDirectoryMigrateValue
 ```
 
 Source: [`packages/api/settings-controller/src/index.ts`](../../packages/api/settings-controller/src/index.ts)

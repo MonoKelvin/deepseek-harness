@@ -75,6 +75,10 @@ The shell is an explicit recovery consumer, so it injects Connection directly ra
 
 On a loopback page, the Client loads the provider's `hasDocument` capability through `settings/describe` and renders **Open configuration file** only when the Host confirms that a provider-owned local document can be prepared. The action calls the pathless, browser-authenticated `settings/openSettingsDocument` Remote; the Host resolves the provider path again, materializes an absent document, and hands it to a native text editor (`open -t` on macOS, bypassing a browser file association; the desktop file association on Linux and Windows; Windows association after `wslpath -w` translation on WSL). Open failures keep the action available and render a localized error. Reopening the dialog or reconnecting refreshes availability after a transient read failure or Host topology change. Non-loopback pages retain the Client policy that withholds this native action and its settings read.
 
+### Data directory
+
+On a loopback page, the General section also renders a **Data directory** row over `settings/describeDataDirectory`: the resolved `$DSH_HOME` path, an open-location icon button that reveals the directory in the Host file manager (`settings/openDataDirectory`, shown only when the Host reports a reachable file manager), and a path field paired with a folder icon button that opens the Host directory picker (`ctx.uiWorkspace.pickDirectory`, a native chooser on a loopback host) and a **Migrate** action (`settings/migrateDataDirectory`). A successful migration shows a restart notice; the copy is verified before the previous directory is deleted on the next launch, so no data is lost and no redundant copy remains after the restart. The row is withheld off-loopback.
+
 ### Host half
 
 The Host half declares `welcomeNoticeVersion` as a volatile field of the `ui-settings-general` entry Config. The welcome step contributed by ui-settings-models reads and writes its `welcomeNoticeVersion` through the existing public settings boundary; the shell itself remains policy-free.

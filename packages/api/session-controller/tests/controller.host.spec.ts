@@ -197,6 +197,22 @@ describe('SessionController facade', () => {
     },
   )
 
+  it('relays a workspace session deletion as an api-session removal', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(AgentRegistry)
+    ctx.provide('sessionPersistence', testSessionPersistence(ctx, {
+      list: () => Promise.resolve([]),
+    }) as never)
+    createSessionTestController(ctx, defaults)
+    const removed = vi.fn()
+    ctx.on('api-session/removed', removed)
+
+    ctx.emit('workspace/session-delete', { sessionId: SessionId('deleted-session') })
+    expect(removed).toHaveBeenCalledWith(SessionId('deleted-session'))
+    await ctx.fiber.dispose()
+  })
+
   it('waits for an admitted background promotion during teardown', async () => {
     const ctx = new Context()
     await ctx.plugin(SessionStore)

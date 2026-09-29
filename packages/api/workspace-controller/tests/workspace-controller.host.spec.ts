@@ -61,7 +61,7 @@ async function harness(options: { systemDocuments?: boolean } = {}) {
   const storageDomain = new DomainFacility(ctx, { backend: 'memory', routes: {} })
   ctx.storage.mount('domain', storageDomain)
   ctx.provide('storageDomain', storageDomain)
-  ctx.provide('sessionPersistence', { list: () => Promise.resolve([]) } as never)
+  ctx.provide('sessionPersistence', { list: () => Promise.resolve([]), delete: () => Promise.resolve() } as never)
   await ctx.plugin(WorkspaceRegistry)
   const dispose = (): void => {}
   ctx.provide('typert', {
@@ -272,6 +272,37 @@ describe('WorkspaceController commands', () => {
     // Unarchive is idempotent: an id that is not archived is not an error.
     await expect(controller.unarchiveSession({ sessionId: session.id }))
       .resolves.toEqual({ archivedSessionIds: [] })
+  })
+
+  it('deletes a known session, refusing an active one and an unknown id', async () => {
+    const { controller, ctx, root } = await harness()
+    const created = await controller.create({ path: stageDir(root, 'delete') })
+    const session = ctx.sessions.create(SessionId('doomed'), {
+      meta: { cwd: created.workspace.path },
+    })
+    await controller.archiveSession({ sessionId: session.id })
+    const deleted: string[] = []
+    const relay = ctx.on('workspace/session-delete', ({ sessionId }) => { deleted.push(String(sessionId)) })
+
+    // An active session is refused with the reported activity; nothing is deleted.
+    const activity = [{ kind: 'probe' as const }]
+    const stopReporting = ctx.on('workspace/session-activity', async ({ sessionId }, next) =>
+      sessionId === session.id ? [...activity, ...(await next())] : next())
+    await expect(controller.deleteSession({ sessionId: session.id })).rejects.toMatchObject({
+      code: 'workspace/session-active',
+      details: { sessionId: session.id, activity },
+    })
+    expect(deleted).toEqual([])
+    stopReporting()
+
+    await expect(controller.deleteSession({ sessionId: session.id })).resolves.toEqual({ deleted: true })
+    // Deletion drops the id from the archive set and announces the removal.
+    expect([...ctx.workspaceRegistry.archivedSessionIds]).toEqual([])
+    expect(deleted).toEqual([String(session.id)])
+    relay()
+
+    await expect(controller.deleteSession({ sessionId: SessionId('unknown') }))
+      .rejects.toMatchObject({ code: 'session/not-found' })
   })
 
   it('pins only known unarchived Sessions and unpins idempotently', async () => {

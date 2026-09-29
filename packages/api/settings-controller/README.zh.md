@@ -31,6 +31,8 @@ kind: "package-reference"
 
 `settings.openSettingsDocument()` 准备提供方持有的文档，并用原生文本编辑器打开；该方法不接受浏览器提供的文件系统目标。
 
+`settings.describeDataDirectory()` 报告 Host 解析为 `$DSH_HOME` 的绝对数据目录，以及是否可达原生文件管理器。`settings.openDataDirectory()` 在文件管理器中定位该目录。`settings.migrateDataDirectory(target)` 把当前数据复制到所选目录并记录此次迁移；旧目录只在下次启动、且复制经校验后才删除，因此失败的复制绝不会破坏源数据，调用方需重启 dsh 以完成迁移。迁移接受浏览器提供的目标，且仅在 loopback 页面可用。
+
 -----
 
 <a id="configuration"></a>

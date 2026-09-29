@@ -61,12 +61,14 @@ export function createWorkspaceShortcutControls(): WorkspaceShortcutControls {
  * @param navigation - session creation and forking from the pointer controls' navigation service.
  * @param controls - browser-owned opening requests.
  * @param archiveSession - shared archive action, including running-work confirmation and notices.
+ * @param requestSessionDelete - shared delete action: raises the irreversible delete confirmation for a session.
  */
 export function installWorkspaceShortcuts(
   ctx: Context,
   navigation: Pick<UiWorkspace, 'startSession' | 'forkSession'>,
   controls: ReturnType<typeof createWorkspaceShortcutControls>,
   archiveSession: (sessionId: SessionId) => void,
+  requestSessionDelete: (sessionId: SessionId) => void,
 ): void {
   const t = ctx.locale.bind('workspace')
   const current = () => Object.values(ctx.sessions.list.getSnapshot().byId)
@@ -117,6 +119,13 @@ export function installWorkspaceShortcuts(
     return target === undefined ? { status: 'blocked', reason: t('shortcut.noSession') }
       : { status: 'handled', run: () => {
         archiveSession(target.id)
+      } }
+  })
+  register('session.delete', () => t('menu.deleteSession'), ['delete session'], 'KeyD', ['primary', 'shift'], ['primary', 'shift'], () => {
+    const target = current()
+    return target === undefined ? { status: 'blocked', reason: t('shortcut.noSession') }
+      : { status: 'handled', run: () => {
+        requestSessionDelete(target.id)
       } }
   })
 }

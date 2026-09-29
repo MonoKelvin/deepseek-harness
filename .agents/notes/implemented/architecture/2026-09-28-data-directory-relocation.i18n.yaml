@@ -1,0 +1,25 @@
+# Bilingual-pair consistency record for 2026-09-28-data-directory-relocation.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-28-data-directory-relocation.md
+/agent-note-one-click-data-directory-relocation-for-the-web-gui:
+  en: 07d83e038104b6e3
+  zh: 6b26bea696900bb3
+/agent-note-one-click-data-directory-relocation-for-the-web-gui/problem:
+  en: df45ac28551cb0e9
+  zh: e603ab0d15ed1ba0
+/agent-note-one-click-data-directory-relocation-for-the-web-gui/decision:
+  en: 62b4837fd6ec3132
+  zh: 574a510b79f54bc1
+/agent-note-one-click-data-directory-relocation-for-the-web-gui/seams:
+  en: de65097cd8fe8a5f
+  zh: 32cbea70ccc99a6a
+/agent-note-one-click-data-directory-relocation-for-the-web-gui/alternatives-considered:
+  en: b9bf195994a27b01
+  zh: f39eaefc8ce5457b
+/agent-note-one-click-data-directory-relocation-for-the-web-gui/consequences:
+  en: e71054797212b549
+  zh: 781778b239773884
+/agent-note-one-click-data-directory-relocation-for-the-web-gui/testing:
+  en: 9f61062dbac79ccb
+  zh: 92234fd4b6c4ba7a

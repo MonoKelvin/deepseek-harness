@@ -75,6 +75,10 @@ Web 与桌面端的通用设置底部显示当前发布版本，使用构建注�
 
 在 loopback 页面上，Client 通过 `settings/describe` 加载提供方的 `hasDocument` 能力，且只有在 Host 确认可准备好一份由提供方持有的本地文档时才渲染**打开配置文件**操作。该操作调用无路径参数且经浏览器认证的 `settings/openSettingsDocument` Remote；Host 会再次解析提供方路径、在文档缺失时将其创建出来，并交给原生文本编辑器（macOS 上使用 `open -t`，绕过浏览器文件关联；Linux 和 Windows 上使用桌面文件关联；WSL 上经 `wslpath -w` 转换后使用 Windows 文件关联）。打开失败时该操作仍可使用，并渲染本地化错误。临时读取失败或 Host 拓扑变化后，重新打开对话框或重新连接会刷新可用性。非 loopback 页面保留 Client 策略，不提供该原生操作及其 settings 读取。
 
+### 数据目录
+
+在 loopback 页面上，通用设置还会通过 `settings/describeDataDirectory` 渲染一个**数据目录**行：展示解析出的 `$DSH_HOME` 路径、一个在 Host 文件管理器中定位该目录的图标按钮（`settings/openDataDirectory`，仅当 Host 报告文件管理器可达时显示），以及一个路径输入框——其内部右侧带一个打开 Host 目录选择器的文件夹图标按钮（`ctx.uiWorkspace.pickDirectory`，在 loopback 主机上为原生选择器）——外加一个**迁移**操作（`settings/migrateDataDirectory`）。迁移成功后显示重启提示；旧目录只在下次启动、且复制经校验后才删除，因此不会丢失数据，重启后也不残留冗余副本。非 loopback 页面不提供该行。
+
 ### 宿主端
 
 宿主端在 `ui-settings-general` 条目的 Config 中把 `welcomeNoticeVersion` 声明为 volatile 字段。`ui-settings-models` 提供的欢迎步骤通过既有公开 settings 边界读写其中的 `welcomeNoticeVersion`；外壳本身仍不持有产品策略。

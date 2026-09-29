@@ -121,3 +121,13 @@ export function dshCachePath(optionsOrSegment: { dshHome?: string } | string = {
 export function dshHomeDisplay(resolvedHome: string): string {
   return resolvedHome === resolve(defaultDshHome()) ? DEFAULT_DSH_HOME_DISPLAY : `$${DSH_HOME_ENV}`
 }
+
+export {
+  DATA_CLEANUP_FILE,
+  DATA_LOCATION_FILE,
+  applyDataDirectoryRedirect,
+  dataCleanupMarkerPath,
+  dataLocationPointerPath,
+  migrateDataDirectory,
+} from './data-directory.ts'
+export type { DataDirectoryMigration, DataDirectoryRedirect } from './data-directory.ts'

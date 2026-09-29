@@ -18,6 +18,8 @@ import WorkspaceRegistry, {
   type workspaceDomainState,
   WorkspaceMoveInvalidError,
   WorkspaceOrderInvalidError,
+  WorkspaceUnknownSessionError,
+  WorkspaceActiveSessionError,
 } from '../src/index.ts'
 import type { WorkspaceDomainState, WorkspaceRecord } from '../src/index.ts'
 import { defaultWorkspaceTitle, fullyQualifiedWorkspacePath } from '../src/paths.ts'
@@ -55,7 +57,10 @@ async function harness(options: HarnessOptions = {}) {
     listed.map(header => ({ header, revision: SessionPersistenceRevision(`rev-${header.id}`) })))
   const open = vi.fn(() => { throw new Error('event bodies must not be opened') })
   const stat = vi.fn(() => { throw new Error('per-session stat must not be needed') })
-  ctx.provide('sessionPersistence', { list, open, stat } as never)
+  const deleteSession = vi.fn(async (id: SessionId): Promise<void> => {
+    listed = listed.filter(header => header.id !== id)
+  })
+  ctx.provide('sessionPersistence', { list, open, stat, delete: deleteSession } as never)
 
   if (options.sessionStore === true) {
     await ctx.plugin(SessionStore)
@@ -82,6 +87,7 @@ async function harness(options: HarnessOptions = {}) {
     list,
     open,
     stat,
+    deleteSession,
     setSessions: (headers: SessionHeader[]) => { listed = headers },
   }
 }
@@ -1115,6 +1121,81 @@ describe('registry-global session unarchive', () => {
 
     const second = await harness({ pool, sessions })
     expect(second.registry.archivedSessionIds).toEqual(['kept'])
+  })
+})
+
+describe('registry-global session delete', () => {
+  it('deletes stored data, drops archive/pin, un-accounts the id, and announces the removal', async () => {
+    const dir = await makeDir('delete-home')
+    const result = await harness({ sessions: [header('keep', dir, 100), header('doomed', dir, 200)] })
+    const workspace = result.registry.list()[0]!
+    await result.registry.archiveSession(SessionId('doomed'))
+    expect(result.registry.archivedSessionIds).toEqual(['doomed'])
+    const announced: SessionId[] = []
+    result.ctx.on('workspace/session-delete', ({ sessionId }) => { announced.push(sessionId) })
+
+    await result.registry.deleteSession(SessionId('doomed'))
+
+    expect(result.deleteSession).toHaveBeenCalledWith(SessionId('doomed'))
+    expect(result.registry.archivedSessionIds).toEqual([])
+    expect(storedState(result.pool).archivedSessionIds).toEqual([])
+    // The id leaves grouping: its header no longer resolves a path.
+    expect(workspace.sessionIds).not.toContain('doomed')
+    expect(workspace.sessionIds).toContain('keep')
+    expect(announced).toEqual([SessionId('doomed')])
+  })
+
+  it('drops a pinned id from the pin set as part of deletion', async () => {
+    const dir = await makeDir('delete-pinned')
+    const result = await harness({ sessions: [header('pinned', dir, 100)] })
+    await result.registry.pinSession(SessionId('pinned'))
+    expect(result.registry.pinnedSessionIds).toEqual(['pinned'])
+
+    await result.registry.deleteSession(SessionId('pinned'))
+    expect(result.registry.pinnedSessionIds).toEqual([])
+    expect(storedState(result.pool).pinnedSessionIds).toEqual([])
+  })
+
+  it('rejects an unknown id without deleting or announcing', async () => {
+    const result = await harness({ sessions: [] })
+    const announced: SessionId[] = []
+    result.ctx.on('workspace/session-delete', ({ sessionId }) => { announced.push(sessionId) })
+
+    await expect(result.registry.deleteSession(SessionId('ghost')))
+      .rejects.toBeInstanceOf(WorkspaceUnknownSessionError)
+    expect(result.deleteSession).not.toHaveBeenCalled()
+    expect(announced).toEqual([])
+  })
+
+  it('refuses to delete an active session, deleting nothing', async () => {
+    const dir = await makeDir('delete-active')
+    const result = await harness({ sessions: [header('busy', dir, 100)] })
+    result.ctx.on('workspace/session-activity', async ({ sessionId }, next) =>
+      sessionId === 'busy' ? [{ kind: 'probe' }, ...await next()] : next())
+
+    await expect(result.registry.deleteSession(SessionId('busy')))
+      .rejects.toBeInstanceOf(WorkspaceActiveSessionError)
+    expect(result.deleteSession).not.toHaveBeenCalled()
+  })
+
+  it('cleans the registry sets even when persistence no longer holds the session', async () => {
+    const dir = await makeDir('delete-gone')
+    const result = await harness({ sessions: [header('stale', dir, 100)] })
+    await result.registry.archiveSession(SessionId('stale'))
+    // The listing no longer reports it, but the archive entry still names it.
+    result.setSessions([])
+    result.deleteSession.mockResolvedValueOnce(undefined)
+
+    await result.registry.deleteSession(SessionId('stale'))
+    expect(result.registry.archivedSessionIds).toEqual([])
+  })
+
+  it('propagates a persistence-listing failure instead of reporting an unknown session', async () => {
+    const result = await harness({ sessions: [] })
+    result.list.mockRejectedValueOnce(new Error('persistence backend down'))
+    await expect(result.registry.deleteSession(SessionId('unlisted')))
+      .rejects.toThrow(/persistence backend down/)
+    expect(result.deleteSession).not.toHaveBeenCalled()
   })
 })
 

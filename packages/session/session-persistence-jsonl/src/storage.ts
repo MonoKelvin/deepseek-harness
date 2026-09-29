@@ -474,6 +474,17 @@ export class JsonlBackendTracker {
   }
 
   /**
+   * Whether a write ownership claim or open write handle holds the id. A
+   * delete refuses while true: removing the artifact under a live writer would
+   * let that writer recreate it.
+   * @param id - the session to test.
+   * @returns true while a write claim or handle exists.
+   */
+  hasActiveWriter(id: SessionId): boolean {
+    return this.writers.has(id)
+  }
+
+  /**
    * Track one open handle for teardown and, for a write handle, bind it as
    * the session's live event route.
    * @param handle - the just-constructed handle.

@@ -106,6 +106,12 @@ export interface SessionPersistenceListOptions {
   readonly signal?: AbortSignal
 }
 
+/** Options for {@link SessionPersistence.delete}. */
+export interface SessionPersistenceDeleteOptions {
+  /** Optional cancellation observed before backend work starts. */
+  readonly signal?: AbortSignal
+}
+
 declare module '@deepseek-ai/cordis' {
   interface Context {
     sessionPersistence: SessionPersistence
@@ -199,6 +205,24 @@ export abstract class SessionPersistence extends Service {
    * @returns one snapshot per stored session.
    */
   abstract list(options?: SessionPersistenceListOptions): Promise<readonly SessionPersistenceSnapshot[]>
+
+  /**
+   * Permanently delete one stored session and every physical artifact the
+   * backend holds for it. The deletion is irreversible: the event log, its
+   * detached header metadata, and any backend-local caches for the id are
+   * removed, so a later `stat`/`open` observes the session as never having
+   * existed.
+   *
+   * The caller owns single-writer safety: no live write handle for the id may
+   * be open, and no in-process write may materialize the session after this
+   * resolves, or the backend can recreate the artifact. Deleting an id that
+   * does not exist resolves without error — deletion is idempotent — but a
+   * storage fault while removing an existing session propagates as itself.
+   * @param id - the stored session to delete.
+   * @param options - optional cancellation.
+   * @returns resolution once every artifact for the id is removed.
+   */
+  abstract delete(id: SessionId, options?: SessionPersistenceDeleteOptions): Promise<void>
 }
 
 export default SessionPersistence

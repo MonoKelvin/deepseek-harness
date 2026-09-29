@@ -32,3 +32,24 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
 export interface SettingsDocumentOpenValue {
   readonly opened: true
 }
+
+/** The data directory the Host currently resolves as `$DSH_HOME`. */
+export interface DataDirectoryDescribeValue {
+  /** Absolute path of the data directory in use. */
+  readonly path: string
+  /** Whether the Host can reveal this path in a native file manager. */
+  readonly canOpen: boolean
+}
+
+/** Confirmation that the data directory was handed to the native file manager. */
+export interface DataDirectoryOpenValue {
+  readonly opened: true
+}
+
+/** Confirmation that a data-directory relocation was staged. */
+export interface DataDirectoryMigrateValue {
+  /** Directory the data was copied into and used after the restart. */
+  readonly target: string
+  /** Always true: relocating the data directory requires restarting dsh. */
+  readonly restartRequired: true
+}

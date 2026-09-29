@@ -22,11 +22,12 @@ import { createHash, randomBytes } from 'node:crypto'
 import {
   SessionPersistence, SessionPersistenceRevision, SessionFormatUnsupportedError,
   SessionPersistenceCorruptionError,
-  SessionAlreadyExistsError, SessionPersistenceNotFoundError,
+  SessionAlreadyExistsError, SessionAlreadyOwnedError, SessionPersistenceNotFoundError,
   assertStoredId, materializeCreateHeader, sessionFormatVersionRefusal, validateStoredEvents,
   type SessionAccess, type SessionHandle,
   type SessionHandleReadResult,
   type SessionLocation, type SessionPersistenceCreateOptions,
+  type SessionPersistenceDeleteOptions,
   type SessionPersistenceListOptions, type SessionPersistenceOpenOptions,
   type SessionPersistenceSnapshot, type SessionPersistenceStatOptions,
   type SessionPersistenceRevision as PersistenceRevision,
@@ -506,6 +507,34 @@ class JsonlSessionPersistence extends SessionPersistence {
     }
     signal?.throwIfAborted()
     return snapshots
+  }
+
+  /**
+   * Permanently delete one stored session: remove its whole session directory
+   * (every format generation and the write-lock node) and drop this process's
+   * cold-read memo for the id. An id with no artifact resolves without work —
+   * deletion is idempotent. Refuses while a live write handle or ownership
+   * claim holds the id: removing the artifact under an active writer would let
+   * it recreate.
+   * @param id - the stored session to delete.
+   * @param options - optional cancellation.
+   * @returns resolution once the directory is gone and the memo is cleared.
+   * @throws {SessionAlreadyOwnedError} when a live write handle owns the id.
+   */
+  async delete(id: SessionId, options?: SessionPersistenceDeleteOptions): Promise<void> {
+    options?.signal?.throwIfAborted()
+    if (this.tracker.hasActiveWriter(id)) throw new SessionAlreadyOwnedError(id)
+    await this.ensureRootEncoding()
+    options?.signal?.throwIfAborted()
+    const selected = await this.findLog(id, options?.signal)
+    options?.signal?.throwIfAborted()
+    if (selected !== undefined) {
+      // Every generation and the lock node live under the one session
+      // directory (format.sessionDir), so removing it recursively erases the
+      // session's whole physical footprint in one step.
+      await rm(dirname(selected.sourcePath), { recursive: true, force: true })
+    }
+    this.coldLogMemo.delete(id)
   }
 
   // --- handle-facing storage internals (package-private via the handle class below) ---

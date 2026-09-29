@@ -73,6 +73,10 @@ const cache = dshCachePath('models')         // $DSH_HOME/cache/models, default 
 
 `resolveDshHome` 先读显式覆盖值，然后读 `$DSH_HOME`，最后回退到操作系统主目录拼接 `.dsh`。选中的值经过波浪号展开并规范化为绝对路径；`dshHomePath` 用 Node 的平台路径规则拼接子路径段。`dshHomeDisplay` 把解析出的路径与默认根目录比较并返回符号标签，因此已配置的主目录绝不泄露其绝对路径。
 
+### 数据目录迁移
+
+`migrateDataDirectory(target)` 把当前数据目录复制到所选位置，然后在固定的默认根目录写入指针文件（`.data-location`）与延迟清理标记（`.data-cleanup`）。启动器在任何代码解析 `$DSH_HOME` 之前调用一次 `applyDataDirectoryRedirect(env)`：它删除标记记录的目录，并在 `$DSH_HOME` 未显式设置时把环境指向已记录的目录。指针与标记始终位于默认根目录，绝不放在可移动的数据内部；旧目录只在复制经校验后才删除，因此失败的复制绝不会破坏源数据，重启后也不残留冗余副本。
+
 ### 规范化机制
 
 `canonicalizeWatchPath` 从目标向上逐级查找，直到找到现有祖先，用 `realpath` 解析它、证明它是可枚举目录，再拼回缺失的后缀。除路径不存在以外的错误都会传播；缺失后缀的祖先若不是目录则被拒绝。

@@ -31,6 +31,8 @@ Mount this package as a Loader entry in a profile that serves browser configurat
 
 `settings.openSettingsDocument()` prepares the provider-owned document and opens it with the native text editor; it accepts no browser-supplied filesystem target.
 
+`settings.describeDataDirectory()` reports the absolute data directory the Host resolves as `$DSH_HOME` and whether a native file manager is reachable. `settings.openDataDirectory()` reveals that directory in the file manager. `settings.migrateDataDirectory(target)` copies the current data to a chosen directory and records the move; the previous directory is deleted only on the next launch, after the copy is verified, so a failed copy never destroys the source, and the caller restarts dsh to complete the move. Migration accepts a browser-supplied target and is a loopback-only action.
+
 -----
 
 <a id="configuration"></a>

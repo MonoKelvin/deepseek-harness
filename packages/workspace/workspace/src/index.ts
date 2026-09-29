@@ -40,33 +40,39 @@ export function WorkspaceId(id: string): WorkspaceId {
 }
 
 /**
- * An archiveSession or pinSession request named a session neither live nor in
- * session persistence — a definite miss only; storage faults propagate as
- * themselves.
+ * An archiveSession, pinSession, or deleteSession request named a session
+ * neither live nor in session persistence — a definite miss only; storage
+ * faults propagate as themselves.
  */
 export class WorkspaceUnknownSessionError extends Error {
   /**
    * @param sessionId - The unknown session id.
    * @param verb - The registry operation that named the session.
    */
-  constructor(readonly sessionId: SessionId, verb: 'archive' | 'pin') {
+  constructor(readonly sessionId: SessionId, verb: 'archive' | 'pin' | 'delete') {
     super(`cannot ${verb} session '${sessionId}': live sessions and session persistence hold no such session`)
     this.name = 'WorkspaceUnknownSessionError'
   }
 }
 
 /**
- * An archiveSession request named a session that at least one
+ * An archiveSession or deleteSession request named a session that at least one
  * `workspace/session-activity` listener reported active. Nothing was written;
- * `activity` names what must stop before the session can be archived.
+ * `activity` names what must stop before the session can be archived or
+ * deleted.
  */
 export class WorkspaceActiveSessionError extends Error {
   /**
    * @param sessionId - The active session id.
    * @param activity - The reported activity, in listener order.
+   * @param verb - The registry operation that named the session.
    */
-  constructor(readonly sessionId: SessionId, readonly activity: readonly SessionActivity[]) {
-    super(`cannot archive session '${sessionId}': the session is active (${activity.map(entry => entry.kind).join(', ')})`)
+  constructor(
+    readonly sessionId: SessionId,
+    readonly activity: readonly SessionActivity[],
+    verb: 'archive' | 'delete' = 'archive',
+  ) {
+    super(`cannot ${verb} session '${sessionId}': the session is active (${activity.map(entry => entry.kind).join(', ')})`)
     this.name = 'WorkspaceActiveSessionError'
   }
 }
@@ -145,6 +151,18 @@ declare module '@deepseek-ai/cordis' {
      * @mode parallel
      */
     'workspace/session-stop'(request: SessionActivityRequest): Promise<void> | void
+    /**
+     * A session's stored data was permanently deleted from session
+     * persistence; the deletion is durable when this dispatches. Listeners
+     * drop their own view of the id — the session-controller relays the
+     * client-facing removal, and any owner holding derived state for the id
+     * discards it. A rejection is logged by the registry and does not undo the
+     * deletion. Deletion is refused while the session is active, so no running
+     * work observes this.
+     * @param request - the session whose data was deleted.
+     * @mode parallel
+     */
+    'workspace/session-delete'(request: SessionActivityRequest): Promise<void> | void
   }
 }
 
@@ -404,6 +422,55 @@ export class WorkspaceRegistry extends Service {
         ...state,
         archivedSessionIds: state.archivedSessionIds.filter(id => id !== sessionId),
       })
+    })
+  }
+
+  /**
+   * Permanently delete one session: its stored event log and every derived
+   * view of it. The session must exist (live or in session persistence) and
+   * must be inactive — the `workspace/session-activity` waterfall is asked
+   * once, and any reported activity rejects with
+   * {@link WorkspaceActiveSessionError} before anything is deleted, so a
+   * running session is never removed underneath its own work. The stored data
+   * is deleted through `sessionPersistence.delete`, the id is dropped from the
+   * archive and pin sets in one durable write, and its header leaves the
+   * registry index so grouping surfaces stop accounting it. The
+   * `workspace/session-delete` providers then relay the removal to their own
+   * views (the session-controller drops the client-facing row). Deleting a
+   * session that persistence no longer holds still cleans the registry sets
+   * and index. This is irreversible: no unarchive restores a deleted session.
+   * @param sessionId - The session to delete.
+   * @returns resolution after the stored data is gone and the registry write is durable.
+   * @throws {WorkspaceUnknownSessionError} when no such session exists.
+   * @throws {WorkspaceActiveSessionError} when the session is active.
+   */
+  deleteSession(sessionId: SessionId): Promise<void> {
+    return this.enqueueOperation(async () => {
+      // The chain slot serializes against every other registry write, so this
+      // check-delete-write sequence cannot interleave with another mutation.
+      if (!(await this.sessionKnown(sessionId))) {
+        throw new WorkspaceUnknownSessionError(sessionId, 'delete')
+      }
+      const activity = await this.ctx.waterfall(
+        'workspace/session-activity', { sessionId }, () => Promise.resolve([]),
+      )
+      if (activity.length > 0) throw new WorkspaceActiveSessionError(sessionId, activity, 'delete')
+      await this.ctx.sessionPersistence.delete(sessionId)
+      const state = this.requireState()
+      if (state.archivedSessionIds.includes(sessionId) || state.pinnedSessionIds.includes(sessionId)) {
+        await this.setState({
+          ...state,
+          archivedSessionIds: state.archivedSessionIds.filter(id => id !== sessionId),
+          pinnedSessionIds: state.pinnedSessionIds.filter(id => id !== sessionId),
+        })
+      }
+      // Drop the header so grouping surfaces (entity.sessionIds filters by the
+      // path index) stop accounting the id; a fresh listing cannot re-add it
+      // because persistence no longer holds it.
+      this.headers.delete(sessionId)
+      this.sessionPaths.delete(sessionId)
+      this.invalidSessionPaths.delete(sessionId)
+      await this.ctx.parallel('workspace/session-delete', { sessionId })
     })
   }
 
