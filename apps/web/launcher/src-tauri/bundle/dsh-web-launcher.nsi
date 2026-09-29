@@ -7,7 +7,7 @@
 #define MyAppName "dsh Web Launcher"
 #define MyAppVersion "0.1.0"
 #define MyAppPublisher "DeepSeek AI"
-#define MyAppURL "https://github.com/deepseek-ai/deepseek-harness"
+#define MyAppURL "https://github.com/MonoKelvin/deepseek-harness"
 #define MyAppExeName "dsh-web-launcher.exe"
 
 [Setup]

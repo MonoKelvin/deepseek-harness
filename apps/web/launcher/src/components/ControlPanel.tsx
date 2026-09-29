@@ -1,5 +1,6 @@
-import React from 'react'
-import { TablerIcon } from '../lib/TablerIcon'
+import { TablerIcon, type TablerIconName } from '../lib/TablerIcon'
+import { Button, type ButtonProps } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 
 export interface ControlPanelProps {
   onInstall: () => void
@@ -21,98 +22,47 @@ interface ActionButtonProps {
   onClick: () => void
   disabled?: boolean
   active?: boolean
-  icon: string
-  variant?: 'primary' | 'secondary' | 'danger'
+  icon: TablerIconName
+  variant?: ButtonProps['variant']
 }
 
-function ActionButton({ label, onClick, disabled, active, icon, variant = 'primary' }: ActionButtonProps) {
-  const variantClasses = {
-    primary: 'btn-primary',
-    secondary: 'btn-secondary',
-    danger: 'btn-danger',
-  }
-
-  const bgClasses = {
-    primary: 'bg-primary hover:bg-primary-hover',
-    secondary: 'bg-bg-card-hover hover:bg-bg-card',
-    danger: 'bg-danger hover:opacity-90',
-  }
-
+function ActionButton({ label, onClick, disabled, active, icon, variant = 'secondary' }: ActionButtonProps) {
   return (
-    <button
+    <Button
+      type="button"
       onClick={onClick}
       disabled={disabled || active}
-      className={`
-        ${variantClasses[variant]}
-        ${bgClasses[variant]}
-        ${active ? 'btn-active' : ''}
-        flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg
-        text-sm font-medium transition-all duration-200
-        disabled:opacity-40 disabled:cursor-not-allowed
-        border border-border hover:border-border-hover
-      `}
+      variant={variant}
+      className="action-button"
+      aria-label={active ? `${label} in progress` : label}
     >
-      {active ? (
-        <TablerIcon name="refresh" size={14} className="animate-spin-slow" />
-      ) : (
-        <TablerIcon name={icon} size={14} />
-      )}
-      {label}
-    </button>
+      <TablerIcon name={active ? 'loader' : icon} size={16} className={active ? 'animate-spin' : undefined} />
+      <span>{active ? 'Working' : label}</span>
+    </Button>
   )
 }
 
+/** Group the lifecycle actions into one consistent control surface. */
 export function ControlPanel({
   onInstall, onBuild, onStart, onStop, onRestart,
   canInstall, canBuild, canStart, canStop, canRestart,
   disabled, activeCommand,
 }: ControlPanelProps) {
   return (
-    <section className="control-section">
-      <div className="glass-card control-card">
-        <div className="grid grid-cols-5 gap-2">
-          <ActionButton
-            label="Install"
-            onClick={onInstall}
-            disabled={!canInstall}
-            active={activeCommand === 'install'}
-            icon="download"
-            variant="secondary"
-          />
-          <ActionButton
-            label="Build"
-            onClick={onBuild}
-            disabled={!canBuild}
-            active={activeCommand === 'build'}
-            icon="terminal"
-            variant="secondary"
-          />
-          <ActionButton
-            label="Start"
-            onClick={onStart}
-            disabled={!canStart}
-            active={activeCommand === 'start'}
-            icon="play"
-            variant="primary"
-          />
-          <ActionButton
-            label="Restart"
-            onClick={onRestart}
-            disabled={!canRestart}
-            active={activeCommand === 'restart'}
-            icon="refresh"
-            variant="secondary"
-          />
-          <ActionButton
-            label="Stop"
-            onClick={onStop}
-            disabled={!canStop}
-            active={activeCommand === 'stop'}
-            icon="pause"
-            variant="danger"
-          />
-        </div>
+    <section aria-label="Server controls">
+      <div className="section-heading">
+        <h2>Lifecycle</h2>
+        <p>Run the common workspace commands</p>
       </div>
+      <Card className="surface control-card">
+        <div className="control-grid">
+          <ActionButton label="Install" onClick={onInstall} disabled={disabled || !canInstall} active={activeCommand === 'install'} icon="package" />
+          <ActionButton label="Build" onClick={onBuild} disabled={disabled || !canBuild} active={activeCommand === 'build'} icon="hammer" />
+          <ActionButton label="Start server" onClick={onStart} disabled={disabled || !canStart} active={activeCommand === 'start'} icon="play" variant="default" />
+          <ActionButton label="Restart" onClick={onRestart} disabled={disabled || !canRestart} active={activeCommand === 'restart'} icon="refresh" />
+          <ActionButton label="Stop" onClick={onStop} disabled={disabled || !canStop} active={activeCommand === 'stop'} icon="pause" variant="destructive" />
+        </div>
+      </Card>
     </section>
   )
 }

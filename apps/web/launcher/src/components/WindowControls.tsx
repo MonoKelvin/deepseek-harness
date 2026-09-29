@@ -1,49 +1,35 @@
-import React from 'react'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { TablerIcon } from '../lib/TablerIcon'
 
+/** Native window actions kept outside the draggable title bar area. */
 export function WindowControls() {
   const handleMinimize = () => {
-    // @ts-ignore
-    window.__TAURI__.window.getCurrentWindow().then((w: any) => w.minimize())
+    void getCurrentWindow().minimize()
   }
 
-  const handleMaximize = () => {
-    // @ts-ignore
-    window.__TAURI__.window.getCurrentWindow().then((w: any) => {
-      w.isMaximized().then((max: boolean) => {
-        if (max) w.unmaximize()
-        else w.maximize()
-      })
-    })
+  const handleMaximize = async () => {
+    const window = getCurrentWindow()
+    if (await window.isMaximized()) {
+      await window.unmaximize()
+    } else {
+      await window.maximize()
+    }
   }
 
   const handleClose = () => {
-    // @ts-ignore
-    window.__TAURI__.window.getCurrentWindow().then((w: any) => w.close())
+    void getCurrentWindow().close()
   }
 
   return (
-    <div className="window-controls justify-end titlebar-button-group">
-      <button
-        onClick={handleMinimize}
-        className="window-button window-button-yellow"
-        title="Minimize"
-      >
-        <TablerIcon name="pause" size={6} />
+    <div className="window-controls titlebar-button-group" aria-label="Window controls">
+      <button type="button" onClick={handleMinimize} className="window-button" title="Minimize">
+        <TablerIcon name="minimize" size={15} />
       </button>
-      <button
-        onClick={handleMaximize}
-        className="window-button window-button-green"
-        title="Maximize"
-      >
-        <TablerIcon name="refresh" size={6} />
+      <button type="button" onClick={() => void handleMaximize()} className="window-button" title="Maximize">
+        <TablerIcon name="maximize" size={14} />
       </button>
-      <button
-        onClick={handleClose}
-        className="window-button window-button-red"
-        title="Close"
-      >
-        <TablerIcon name="x" size={6} />
+      <button type="button" onClick={handleClose} className="window-button window-button-red" title="Close">
+        <TablerIcon name="x" size={15} />
       </button>
     </div>
   )

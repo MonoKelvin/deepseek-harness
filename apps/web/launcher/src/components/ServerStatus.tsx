@@ -1,121 +1,100 @@
 import React from 'react'
-import { TablerIcon } from '../lib/TablerIcon'
-import type { ServerStatusInfo } from '../lib/tauri-api'
+import { TablerIcon, type TablerIconName } from '../lib/TablerIcon'
+import type { ServerStatusInfo, ServerState } from '../types/server-status'
+import { Badge, type BadgeProps } from '@/components/ui/badge'
+import { Card } from '@/components/ui/card'
+import { Separator } from '@/components/ui/separator'
+import { Skeleton } from '@/components/ui/skeleton'
 
 interface ServerStatusProps {
   status: ServerStatusInfo | null
   loading: boolean
 }
 
-const stateLabels: Record<NonNullable<ServerStatusInfo['state']>, string> = {
-  stopped: 'Stopped',
-  starting: 'Starting…',
-  'running-managed': 'Running',
-  'running-external': 'Running (external)',
-  stopping: 'Stopping…',
+const stateInfo: Record<ServerState, { label: string; icon: TablerIconName; variant: BadgeProps['variant'] }> = {
+  stopped: { label: 'Stopped', icon: 'pause', variant: 'secondary' },
+  starting: { label: 'Starting', icon: 'refresh', variant: 'warning' },
+  'running-managed': { label: 'Running', icon: 'server', variant: 'default' },
+  'running-external': { label: 'Running externally', icon: 'wifi', variant: 'info' },
+  stopping: { label: 'Stopping', icon: 'refresh', variant: 'warning' },
 }
 
-const stateColors: Record<NonNullable<ServerStatusInfo['state']>, string> = {
-  stopped: 'bg-danger',
-  starting: 'bg-warning',
-  'running-managed': 'bg-success',
-  'running-external': 'bg-info',
-  stopping: 'bg-warning',
-}
-
-const stateIcons: Record<NonNullable<ServerStatusInfo['state']>, string> = {
-  stopped: 'pause',
-  starting: 'refresh',
-  'running-managed': 'server',
-  'running-external': 'wifi',
-  stopping: 'refresh',
-}
-
-export function ServerStatus({ status, loading }: ServerStatusProps) {
-  if (loading || !status) {
-    return (
-      <section className="status-section">
-        <div className="glass-card status-card">
-          <div className="status-row">
-            <span className="status-label flex items-center gap-2">
-              <TablerIcon name="activity" size={14} />
-              Status
-            </span>
-            <span className="status-value text-text-tertiary">Loading…</span>
+function LoadingStatus() {
+  return (
+    <section aria-label="Loading server status" className="status-section">
+      <Card className="surface status-card">
+        <div className="status-card-top">
+          <div className="status-card-title">
+            <span className="status-state-icon"><TablerIcon name="activity" size={17} /></span>
+            <div>
+              <Skeleton className="h-[18px] w-[150px]" />
+              <Skeleton className="mt-2 h-3 w-[200px]" />
+            </div>
           </div>
+          <Skeleton className="h-[27px] w-[84px]" />
         </div>
-      </section>
-    )
-  }
+        <div className="status-details">
+          {[1, 2, 3].map((item) => <Skeleton key={item} className="h-[38px]" />)}
+        </div>
+      </Card>
+    </section>
+  )
+}
 
-  const state = status.state
-  const label = stateLabels[state]
-  const dotColor = stateColors[state]
-  const iconName = stateIcons[state]
-  const isRunning = state !== 'stopped'
+/** Present the server state and the connection details used by the launcher. */
+export function ServerStatus({ status, loading }: ServerStatusProps) {
+  if (loading || !status) return <LoadingStatus />
+
+  const info = stateInfo[status.state]
+  const isRunning = status.state !== 'stopped'
+  const processValue = status.pid === null ? (status.external ? 'External process' : 'Not running') : `PID ${status.pid}`
 
   return (
-    <section className="status-section">
-      <div className="glass-card status-card">
-        <div className="status-row">
-          <span className="status-label flex items-center gap-2">
-            <TablerIcon name={iconName} size={14} />
-            Status
-          </span>
-          <span className={`status-badge ${dotColor.replace('bg-', 'bg-opacity-20 ')} text-${dotColor.replace('bg-', 'text-')}`}>
-            <span className={`status-dot ${dotColor} ${state === 'running-managed' || state === 'running-external' ? 'status-pulse' : ''}`}></span>
-            {label}
-          </span>
+    <section aria-label="Server status" className="status-section">
+      <Card className="surface status-card">
+        <div className="status-card-top">
+          <div className="status-card-title">
+            <span className="status-state-icon"><TablerIcon name={info.icon} size={17} /></span>
+            <div>
+              <h2>Development server</h2>
+              <p>Local dsh web process</p>
+            </div>
+          </div>
+          <Badge variant={info.variant}>
+            <span className={`status-dot ${isRunning ? 'status-pulse' : ''}`} />
+            {info.label}
+          </Badge>
         </div>
 
-        {isRunning && status.url && (
-          <div className="status-row">
-            <span className="status-label flex items-center gap-2">
-              <TablerIcon name="terminal" size={14} />
-              URL
-            </span>
-            <a
-              href={status.url}
-              className="status-value text-primary hover:text-primary-hover transition-colors flex items-center gap-1"
-              target="_blank"
-              rel="noreferrer"
-            >
-              {status.url}
-              <TablerIcon name="eye" size={12} />
-            </a>
+        <Separator className="mt-[22px]" />
+        <div className="status-details">
+          <div className="status-detail">
+            <span className="status-detail-label"><TablerIcon name="externalLink" size={14} />Endpoint</span>
+            {status.url ? (
+              <a className="status-detail-value status-detail-link" href={status.url} target="_blank" rel="noreferrer">
+                {status.url}
+              </a>
+            ) : (
+              <span className="status-detail-value">Waiting to start</span>
+            )}
           </div>
-        )}
-
-        {status.port && (
-          <div className="status-row">
-            <span className="status-label flex items-center gap-2">
-              <TablerIcon name="server" size={14} />
-              Port
-            </span>
-            <span className="status-value text-text-tertiary">{status.port}</span>
+          <div className="status-detail">
+            <span className="status-detail-label"><TablerIcon name="server" size={14} />Port</span>
+            <span className="status-detail-value">{status.port ?? 'Not assigned'}</span>
           </div>
-        )}
-
-        {status.pid !== null && status.state === 'running-managed' && (
-          <div className="status-row">
-            <span className="status-label flex items-center gap-2">
-              <TablerIcon name="activity" size={14} />
-              PID
-            </span>
-            <span className="status-value text-text-tertiary">{status.pid}</span>
+          <div className="status-detail">
+            <span className="status-detail-label"><TablerIcon name="activity" size={14} />Process</span>
+            <span className="status-detail-value">{processValue}</span>
           </div>
-        )}
+        </div>
 
         {status.error && (
-          <div className="status-row">
-            <span className="status-label flex items-center gap-2">
-              <TablerIcon name="alert" size={14} />
-              Error
-            </span>
-            <span className="status-value text-danger">{status.error}</span>
+          <div className="status-error" role="alert">
+            <TablerIcon name="alert" size={15} />
+            <span>{status.error}</span>
           </div>
         )}
-      </div>
+      </Card>
     </section>
   )
 }
