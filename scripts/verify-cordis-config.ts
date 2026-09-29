@@ -63,7 +63,24 @@ if (import.meta.main) {
   const files = cordisConfigFiles(root)
 
   for (const file of files) {
-    const document = loadCordisYaml(readFileSync(resolve(root, file), 'utf8'))
+    const absFile = resolve(root, file)
+    const document = loadCordisYaml(readFileSync(absFile, 'utf8'))
+    // A file whose root is a bare path string is a Loader include reference: the
+    // Loader resolves it to the target config. Validate the resolved target
+    // instead so the path-reference itself is not flagged as malformed.
+    if (typeof document === 'string') {
+      const resolved = resolve(dirname(absFile), document)
+      const relativeResolved = relative(root, resolved).replaceAll('\\', '/')
+      const included = loadCordisYaml(readFileSync(resolved, 'utf8'))
+      if (!isUnknownArray(included)) {
+        errors.push(`${file}: include target ${relativeResolved}: root must be a Loader entry array`)
+        continue
+      }
+      for (let index = 0; index < included.length; index++) {
+        validateEntry(included[index], `${file} -> ${relativeResolved}`, `[${index}]`)
+      }
+      continue
+    }
     if (!isUnknownArray(document)) {
       errors.push(`${file}: root must be a Loader entry array`)
       continue
