@@ -39,3 +39,8 @@ export function stopServer(): Promise<CommandOutput> {
 export function restartServer(): Promise<CommandOutput> {
   return invoke<CommandOutput>('restart_server')
 }
+
+/** Open a URL in the user's default browser via the launcher backend. */
+export function openUrl(url: string): Promise<void> {
+  return invoke<void>('open_url', { url })
+}

@@ -1,6 +1,10 @@
 use std::sync::Arc;
 
-use tauri::State;
+use tauri::{
+  menu::{Menu, MenuItem},
+  tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+  AppHandle, Manager, State, WindowEvent,
+};
 
 use process::{
   build_status, run_pnpm, start_dsh_web, stop_dsh_web,
@@ -92,12 +96,61 @@ async fn open_url(url: String) -> Result<(), String> {
   Ok(())
 }
 
+/// Show the main window if hidden, otherwise hide it (tray click / menu toggle).
+fn toggle_main_window(app: &AppHandle) {
+  if let Some(window) = app.get_webview_window("main") {
+    if window.is_visible().unwrap_or(false) {
+      let _ = window.hide();
+    } else {
+      let _ = window.show();
+      let _ = window.set_focus();
+    }
+  }
+}
+
 /// The entry point for the Tauri application.
 pub fn run() {
   let manager = Arc::new(tokio::sync::Mutex::new(ServerManager::new()));
 
   tauri::Builder::default()
     .manage(AppState(manager))
+    .setup(|app| {
+      let toggle = MenuItem::with_id(app, "toggle", "显示 / 隐藏", true, None::<&str>)?;
+      let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+      let menu = Menu::with_items(app, &[&toggle, &quit])?;
+
+      TrayIconBuilder::new()
+        .icon(app.default_window_icon().expect("bundled window icon").clone())
+        .tooltip("DSH 启动器")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+          "toggle" => toggle_main_window(app),
+          "quit" => app.exit(0),
+          _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+          if let TrayIconEvent::Click {
+            button: MouseButton::Left,
+            button_state: MouseButtonState::Up,
+            ..
+          } = event
+          {
+            toggle_main_window(tray.app_handle());
+          }
+        })
+        .build(app)?;
+
+      Ok(())
+    })
+    // Closing the window (in-app control or OS request) hides to the tray
+    // instead of quitting; the tray menu owns real exit.
+    .on_window_event(|window, event| {
+      if let WindowEvent::CloseRequested { api, .. } = event {
+        api.prevent_close();
+        let _ = window.hide();
+      }
+    })
     .invoke_handler(tauri::generate_handler![
       get_status,
       install_deps,

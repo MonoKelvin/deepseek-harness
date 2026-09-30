@@ -6,8 +6,6 @@ import {
   IconExternalLink,
   IconHammer,
   IconLoader2,
-  IconMaximize,
-  IconMinus,
   IconPackage,
   IconPlayerPlay,
   IconPlayerStop,
@@ -15,6 +13,7 @@ import {
   IconRocket,
   IconServer,
   IconWifi,
+  IconWorld,
   IconX,
 } from '@tabler/icons-react'
 
@@ -25,8 +24,7 @@ const icons = {
   externalLink: IconExternalLink,
   hammer: IconHammer,
   loader: IconLoader2,
-  maximize: IconMaximize,
-  minimize: IconMinus,
+  language: IconWorld,
   package: IconPackage,
   play: IconPlayerPlay,
   pause: IconPlayerStop,
@@ -43,8 +41,8 @@ interface TablerIconProps extends IconProps {
   name: TablerIconName
 }
 
-/** Render one of the launcher's shared Tabler icons with consistent stroke weight. */
-export function TablerIcon({ name, size = 18, stroke = 1.8, ...props }: TablerIconProps) {
+/** Render one of the launcher's shared Tabler icons with a consistent stroke weight. */
+export function TablerIcon({ name, size = 18, stroke = 1.75, ...props }: TablerIconProps) {
   const Icon = icons[name]
   return <Icon size={size} stroke={stroke} aria-hidden="true" {...props} />
 }

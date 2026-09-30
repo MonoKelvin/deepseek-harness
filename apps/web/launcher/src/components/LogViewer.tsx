@@ -1,5 +1,6 @@
 import { TablerIcon } from '../lib/TablerIcon'
 import type { CommandOutput } from '../lib/tauri-api'
+import { useI18n } from '../i18n'
 import { Card } from '@/components/ui/card'
 
 export interface LogViewerProps {
@@ -9,9 +10,8 @@ export interface LogViewerProps {
 
 /** Show the most recent command result in a compact terminal surface. */
 export function LogViewer({ output, error }: LogViewerProps) {
-  const content = error
-    ? error
-    : [output?.stdout, output?.stderr].filter(Boolean).join('\n')
+  const { t } = useI18n()
+  const content = error ? error : [output?.stdout, output?.stderr].filter(Boolean).join('\n')
 
   if (!content) return null
 
@@ -19,27 +19,22 @@ export function LogViewer({ output, error }: LogViewerProps) {
   const lines = content.split('\n')
 
   return (
-    <section aria-label="Command output">
-      <div className="section-heading">
-        <h2>Latest output</h2>
-        <p>{isError ? 'The command returned an error' : 'The command completed successfully'}</p>
-      </div>
-      <Card className="surface log-card">
-        <div className="log-header">
-          <div className="log-title">
-            <TablerIcon name={isError ? 'alert' : 'check'} size={15} />
-            <span>{isError ? 'Command failed' : 'Command completed'}</span>
-          </div>
-          <span className="log-meta">{lines.length} lines</span>
+    <Card className="overflow-hidden">
+      <div className="flex h-10 items-center justify-between border-b border-border px-3">
+        <div className="flex items-center gap-2 text-[13px] font-medium">
+          <TablerIcon name={isError ? 'alert' : 'check'} size={14} className={isError ? 'text-destructive' : 'text-success'} />
+          <span>{isError ? t('log.fail.title') : t('log.done.title')}</span>
         </div>
-        <pre className="log-content">
-          {lines.map((line, index) => (
-            <span key={`${index}-${line}`} className={line.startsWith('[stderr]') || isError ? 'log-line-stderr' : undefined}>
-              {line}{index < lines.length - 1 ? '\n' : ''}
-            </span>
-          ))}
-        </pre>
-      </Card>
-    </section>
+        <span className="text-xs text-muted-foreground">{t('log.lines', { n: lines.length })}</span>
+      </div>
+      <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words px-3 py-2.5 font-mono text-[11px] leading-relaxed text-muted-foreground">
+        {lines.map((line, index) => (
+          <span key={`${index}-${line}`} className={line.startsWith('[stderr]') || isError ? 'text-destructive' : undefined}>
+            {line}
+            {index < lines.length - 1 ? '\n' : ''}
+          </span>
+        ))}
+      </pre>
+    </Card>
   )
 }

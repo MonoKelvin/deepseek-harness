@@ -1,10 +1,12 @@
 import { useState } from 'react'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { ServerStatus } from './components/ServerStatus'
 import { ControlPanel } from './components/ControlPanel'
 import { LogViewer } from './components/LogViewer'
-import { WindowControls } from './components/WindowControls'
 import { TablerIcon } from './lib/TablerIcon'
+import { Button } from '@/components/ui/button'
 import { useServerStatus } from './hooks/useServerStatus'
+import { useI18n } from './i18n'
 import {
   installDeps,
   buildFrontend,
@@ -13,7 +15,6 @@ import {
   restartServer,
   type CommandOutput,
 } from './lib/tauri-api'
-import './App.css'
 
 const POLL_INTERVAL_MS = 2000
 
@@ -22,6 +23,7 @@ function errorMessage(error: unknown): string {
 }
 
 function App() {
+  const { t, toggleLocale } = useI18n()
   const { status, loading, refresh, error: statusError } = useServerStatus(POLL_INTERVAL_MS)
   const [activeCommand, setActiveCommand] = useState<string | null>(null)
   const [commandOutput, setCommandOutput] = useState<CommandOutput | null>(null)
@@ -49,31 +51,33 @@ function App() {
   const canInstall = status?.state === 'stopped'
 
   return (
-    <div className="app-container">
-      <header className="app-header titlebar-drag-region">
-        <div className="app-title">
-          <span className="app-icon"><TablerIcon name="rocket" size={16} /></span>
-          <span>dsh Web Launcher</span>
-          <span className="app-title-muted">/ web</span>
+    <div className="flex h-screen flex-col overflow-hidden rounded-[10px] border border-border bg-background text-foreground">
+      <header className="drag-region flex h-11 flex-shrink-0 items-center justify-between border-b border-border px-3">
+        <div className="flex items-center gap-2">
+          <span className="grid size-6 place-items-center rounded-md bg-primary/15 text-primary">
+            <TablerIcon name="rocket" size={15} />
+          </span>
+          <span className="text-sm font-semibold tracking-tight">{t('app.title')}</span>
         </div>
-        <WindowControls />
+        <div className="no-drag flex items-center gap-1">
+          <Button variant="ghost" size="icon" onClick={toggleLocale} title="切换语言 / Switch language" className="text-xs font-semibold">
+            {t('lang.toggle')}
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => void getCurrentWindow().hide()}
+            title={t('titlebar.close')}
+            aria-label={t('titlebar.close')}
+            className="hover:bg-destructive/20 hover:text-destructive"
+          >
+            <TablerIcon name="x" size={16} />
+          </Button>
+        </div>
       </header>
 
-      <main className="app-main">
-        <div className="workspace-heading">
-          <h1>Web workspace</h1>
-          <p>Install, build, and run the local dsh web server from one focused control surface.</p>
-        </div>
-
-        {statusError && (
-          <div className="status-error" role="alert">
-            <TablerIcon name="alert" size={15} />
-            <span>{statusError}</span>
-          </div>
-        )}
-
-        <ServerStatus status={status} loading={loading} />
-
+      <main className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 py-3">
+        <ServerStatus status={status} loading={loading} error={statusError} />
         <ControlPanel
           onInstall={() => void runCommand('install', installDeps)}
           onBuild={() => void runCommand('build', buildFrontend)}
@@ -88,15 +92,14 @@ function App() {
           disabled={activeCommand !== null}
           activeCommand={activeCommand ?? undefined}
         />
-
         {(commandOutput || commandError) && (
           <LogViewer output={commandOutput ?? undefined} error={commandError ?? undefined} />
         )}
       </main>
 
-      <footer className="app-footer">
-        <span>DeepSeek Harness</span>
-        <span className="footer-status"><span className="status-dot" />Polling every 2 seconds</span>
+      <footer className="flex h-8 flex-shrink-0 items-center justify-between border-t border-border px-4 text-xs text-muted-foreground">
+        <span>{t('footer.brand')}</span>
+        <span>{t('footer.polling')}</span>
       </footer>
     </div>
   )

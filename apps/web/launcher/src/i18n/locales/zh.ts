@@ -1,0 +1,40 @@
+/** Simplified Chinese dictionary (default locale). Keys are shared across locales. */
+export const zh = {
+  'app.title': 'DSH 启动器',
+  'titlebar.close': '隐藏到托盘',
+  'lang.toggle': 'EN',
+
+  'status.title': '开发服务器',
+  'status.subtitle': '本地 dsh web 进程',
+  'status.state.stopped': '已停止',
+  'status.state.starting': '启动中',
+  'status.state.running-managed': '运行中',
+  'status.state.running-external': '外部运行',
+  'status.state.stopping': '停止中',
+  'status.endpoint': '端点',
+  'status.port': '端口',
+  'status.process': '进程',
+  'status.waiting': '等待启动',
+  'status.notAssigned': '未分配',
+  'status.notRunning': '未运行',
+  'status.externalProcess': '外部进程',
+  'status.pid': 'PID {pid}',
+
+  'controls.title': '服务控制',
+  'controls.subtitle': '常用工作区命令',
+  'controls.install': '安装',
+  'controls.build': '构建',
+  'controls.start': '启动',
+  'controls.stop': '停止',
+  'controls.restart': '重启',
+  'controls.working': '执行中',
+
+  'log.done.title': '命令完成',
+  'log.fail.title': '命令失败',
+  'log.done.desc': '命令执行成功',
+  'log.fail.desc': '命令返回错误',
+  'log.lines': '{n} 行',
+
+  'footer.brand': 'DeepSeek Harness',
+  'footer.polling': '每 2 秒自动刷新',
+} as const
