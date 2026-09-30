@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef } from 'react'
 import type { LogEntry } from '../types/server-status'
-import { useI18n } from '../i18n'
+import { useI18n, type TranslationKey } from '../i18n'
 import { Button } from '@/components/ui/button'
 import { TablerIcon } from '../lib/TablerIcon'
 import { cn } from '../lib/utils'
@@ -13,21 +13,16 @@ interface LogViewerProps {
   onCopy: () => void
 }
 
-const levelLabels: Record<string, string> = {
-  info: 'INFO',
-  warn: 'WARN',
-  error: 'ERROR',
-  debug: 'DEBUG',
-}
-
-function formatTimestamp(ts: string): string {
+function formatTimestamp(ts: string, locale: 'zh' | 'en'): string {
   try {
     const d = new Date(ts)
-    return d.toLocaleString(undefined, {
+    const options: Intl.DateTimeFormatOptions = {
       year: 'numeric', month: '2-digit', day: '2-digit',
       hour: '2-digit', minute: '2-digit', second: '2-digit',
       hour12: false,
-    }).replace(/\//g, '-') + `.${String(d.getMilliseconds()).padStart(3, '0')}`
+    }
+    const loc = locale === 'zh' ? 'zh-CN' : 'en-US'
+    return d.toLocaleString(loc, options).replace(/\//g, '-') + `.${String(d.getMilliseconds()).padStart(3, '0')}`
   } catch {
     return ts
   }
@@ -35,10 +30,23 @@ function formatTimestamp(ts: string): string {
 
 /** Render backend snapshots once, retaining local IPC errors in the same view. */
 export function LogViewer({ entries, errors, activeLabel, onClear, onCopy }: LogViewerProps) {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const body = useRef<HTMLDivElement>(null)
   const follow = useRef(true)
   const lastId = entries.at(-1)?.id
+
+  const levelLabel = (severity: string) => t(`log.level.${severity}` as TranslationKey)
+  const copyToast = () => {
+    const el = body.current?.closest('.log-viewer')
+    if (el) {
+      const dot = document.createElement('span')
+      dot.className = 'copy-toast'
+      dot.textContent = t('log.copied')
+      el.appendChild(dot)
+      requestAnimationFrame(() => { dot.style.opacity = '1'; dot.style.transform = 'translateY(0)' })
+      setTimeout(() => { dot.style.opacity = '0'; dot.style.transform = 'translateY(-4px)'; dot.remove() }, 1400)
+    }
+  }
 
   useLayoutEffect(() => {
     if (follow.current && body.current) body.current.scrollTop = body.current.scrollHeight
@@ -50,7 +58,7 @@ export function LogViewer({ entries, errors, activeLabel, onClear, onCopy }: Log
         <Button variant="ghost" size="sm" onClick={onClear} aria-label={t('log.clear')}>
           <TablerIcon name="trash" size={14} />
         </Button>
-        <Button variant="ghost" size="sm" onClick={onCopy} aria-label={t('log.copy')}>
+        <Button variant="ghost" size="sm" onClick={() => { onCopy(); copyToast() }} aria-label={t('log.copy')}>
           <TablerIcon name="copy" size={14} />
         </Button>
       </div>
@@ -74,16 +82,16 @@ export function LogViewer({ entries, errors, activeLabel, onClear, onCopy }: Log
                 data-severity={entry.severity}
                 className="log-line"
               >
-                <span className="log-timestamp">{formatTimestamp(entry.timestamp)}</span>
-                <span className={`log-level log-level-${entry.severity}`}>{levelLabels[entry.severity] ?? 'INFO'}</span>
+                <span className="log-timestamp">{formatTimestamp(entry.timestamp, locale)}</span>
+                <span className={`log-level log-level-${entry.severity}`}>{levelLabel(entry.severity)}</span>
                 <span className="log-message">{entry.message}</span>
                 {'\n'}
               </span>
             ))}
             {errors.map((error, index) => (
               <span key={`ipc-${index}`} className="log-line log-error">
-                <span className="log-timestamp">{new Date().toISOString()}</span>
-                <span className="log-level log-level-error">ERROR</span>
+                <span className="log-timestamp">{formatTimestamp(new Date().toISOString(), locale)}</span>
+                <span className="log-level log-level-error">{levelLabel('error')}</span>
                 <span className="log-message">{error}</span>
                 {'\n'}
               </span>

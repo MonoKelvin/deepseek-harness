@@ -16,6 +16,7 @@ export interface ServerStatusInfo {
   url: string | null
   pid: number | null
   external: boolean
+  dshDirectoryValid: boolean
   logEntries: LogEntry[]
   error: string | null
 }

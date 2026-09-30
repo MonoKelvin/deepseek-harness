@@ -7,8 +7,10 @@ use tauri::{
 };
 
 use process::{
-  append_log, build_status, clear_logs, log_command_result, run_pnpm, start_dsh_web, stop_dsh_web,
-  CommandOutput, LogSeverity, LogSource, ServerManager, ServerStatusInfo, SharedLogBuffer, SharedManager,
+  append_log, build_status, clear_logs as clear_log_buffer, log_command_result, run_pnpm,
+  start_dsh_web, stop_dsh_web,
+  CommandOutput, LogSeverity, LogSource, ServerManager, ServerStatusInfo, SharedLogBuffer,
+  SharedManager,
 };
 use state::{save_settings, AppSettings, SharedSettings};
 
@@ -25,11 +27,24 @@ pub struct AppState {
 
 #[tauri::command]
 async fn get_status(state: State<'_, AppState>) -> Result<ServerStatusInfo, String> {
-  let mut info = build_status(&state.manager).await;
-  let dsh_valid = state.settings.lock().await.dsh_directory.as_ref()
-    .map(|d| state::is_valid_dsh_root(std::path::Path::new(d)))
-    .unwrap_or(false);
-  info.error = if dsh_valid { None } else {
+  let settings = state.settings.lock().await.clone();
+  let user_specified = settings.dsh_directory.is_some();
+  let dsh_valid = state::resolve_dsh_root(&settings).is_some();
+  // When the user has specified a directory that is not a valid DSH root,
+  // surface a structured error so the frontend can disable controls.
+  if user_specified && !dsh_valid {
+    append_log(
+      &state.logs,
+      LogSource::Launcher,
+      LogSeverity::Error,
+      state::t_log(&state::current_locale(&settings), "dsh.unknown", &[]),
+    )
+    .await;
+  }
+  let mut info = build_status(&state.manager, dsh_valid).await;
+  info.error = if dsh_valid {
+    None
+  } else {
     Some("DSH directory not configured".to_string())
   };
   Ok(info)
@@ -41,47 +56,62 @@ async fn get_settings(state: State<'_, AppState>) -> Result<AppSettings, String>
 }
 
 #[tauri::command]
-async fn set_dsh_directory(state: State<'_, AppState>, path: String) -> Result<AppSettings, String> {
-  let mut settings = state.settings.lock().await;
-  settings.dsh_directory = Some(path);
-  drop(settings);
-  save_settings(&state.app_handle(), &state.settings.lock().await);
-  Ok(state.settings.lock().await.clone())
+async fn set_dsh_directory(state: State<'_, AppState>, app_handle: AppHandle, path: String) -> Result<AppSettings, String> {
+  let result = {
+    let mut settings = state.settings.lock().await;
+    settings.dsh_directory = Some(path);
+    settings.clone()
+  };
+  save_settings(&app_handle, &result);
+  let locale = state::current_locale(&result);
+  if state::is_valid_dsh_root(std::path::Path::new(result.dsh_directory.as_deref().unwrap_or(""))) {
+    append_log(&state.logs, LogSource::Launcher, LogSeverity::Info, state::t_log(&locale, "dsh.set.success", &[])).await;
+  } else {
+    append_log(&state.logs, LogSource::Launcher, LogSeverity::Error, state::t_log(&locale, "dsh.set.invalid", &[])).await;
+  }
+  Ok(result)
 }
 
 #[tauri::command]
-async fn set_theme(state: State<'_, AppState>, theme: String) -> Result<(), String> {
-  let mut settings = state.settings.lock().await;
-  settings.theme = theme;
-  drop(settings);
-  save_settings(&state.app_handle(), &state.settings.lock().await);
+async fn set_theme(state: State<'_, AppState>, app_handle: AppHandle, theme: String) -> Result<(), String> {
+  let result = {
+    let mut settings = state.settings.lock().await;
+    settings.theme = theme;
+    settings.clone()
+  };
+  save_settings(&app_handle, &result);
   Ok(())
 }
 
 #[tauri::command]
-async fn set_locale(state: State<'_, AppState>, locale: String) -> Result<(), String> {
-  let mut settings = state.settings.lock().await;
-  settings.locale = locale;
-  drop(settings);
-  save_settings(&state.app_handle(), &state.settings.lock().await);
+async fn set_locale(state: State<'_, AppState>, app_handle: AppHandle, locale: String) -> Result<(), String> {
+  let result = {
+    let mut settings = state.settings.lock().await;
+    settings.locale = locale;
+    settings.clone()
+  };
+  save_settings(&app_handle, &result);
   Ok(())
 }
 
 #[tauri::command]
 async fn open_directory_picker(window: tauri::Window) -> Result<Option<String>, String> {
-  use tauri::api::dialog::FileDialogBuilder;
-  let (tx, rx) = std::sync::mpsc::channel();
-  FileDialogBuilder::new()
+  use tauri_plugin_dialog::DialogExt;
+  let picked = window
+    .dialog()
+    .file()
     .set_title("Select DSH directory")
-    .pick_folder(window, move |result| {
-      let _ = tx.send(result.map(|p| p.to_string_lossy().to_string()));
-    });
-  rx.recv().map_err(|e| e.to_string())
+    .blocking_pick_folder();
+  match picked {
+    Some(tauri_plugin_dialog::FilePath::Path(path)) => Ok(Some(path.to_string_lossy().to_string())),
+    Some(tauri_plugin_dialog::FilePath::Url(url)) => Ok(Some(url.to_string())),
+    None => Ok(None),
+  }
 }
 
 #[tauri::command]
 async fn clear_logs(state: State<'_, AppState>) -> Result<(), String> {
-  clear_logs(&state.logs).await;
+  clear_log_buffer(&state.logs).await;
   Ok(())
 }
 
@@ -100,9 +130,10 @@ async fn build_frontend(state: State<'_, AppState>) -> Result<CommandOutput, Str
 #[tauri::command]
 async fn start_server(state: State<'_, AppState>) -> Result<CommandOutput, String> {
   let settings = state.settings.lock().await.clone();
+  let locale = state::current_locale(&settings);
   let mut manager = state.manager.lock().await;
   match start_dsh_web(&mut manager, &settings).await {
-    Ok(pid) => Ok(CommandOutput { success: true, stdout: format!("Process started (PID {pid})"), stderr: String::new() }),
+    Ok(pid) => Ok(CommandOutput { success: true, stdout: state::t_log(&locale, "process.started", &[("pid", &pid.to_string())]), stderr: String::new() }),
     Err(error) => Ok(CommandOutput { success: false, stdout: String::new(), stderr: error }),
   }
 }
@@ -119,12 +150,13 @@ async fn stop_server(state: State<'_, AppState>) -> Result<CommandOutput, String
 #[tauri::command]
 async fn restart_server(state: State<'_, AppState>) -> Result<CommandOutput, String> {
   let settings = state.settings.lock().await.clone();
+  let locale = state::current_locale(&settings);
   let mut manager = state.manager.lock().await;
   if let Err(error) = stop_dsh_web(&mut manager).await {
     return Ok(CommandOutput { success: false, stdout: String::new(), stderr: error });
   }
   match start_dsh_web(&mut manager, &settings).await {
-    Ok(pid) => Ok(CommandOutput { success: true, stdout: format!("Process restarted (PID {pid})"), stderr: String::new() }),
+    Ok(pid) => Ok(CommandOutput { success: true, stdout: state::t_log(&locale, "process.restarted", &[("pid", &pid.to_string())]), stderr: String::new() }),
     Err(error) => Ok(CommandOutput { success: false, stdout: String::new(), stderr: error }),
   }
 }
@@ -149,8 +181,10 @@ fn launch_url(value: &str) -> Result<(), String> {
 
 #[tauri::command]
 async fn open_url(url: String, state: State<'_, AppState>) -> Result<(), String> {
+  let settings = state.settings.lock().await.clone();
+  let locale = state::current_locale(&settings);
   let result = launch_url(&url);
-  log_command_result(&state.logs, &format!("open {url}"), result.as_ref().map(|_| ()).map_err(|error| error.as_str())).await;
+  log_command_result(&state.logs, &locale, &format!("open {url}"), result.as_ref().map(|_| ()).map_err(|error| error.as_str())).await;
   result
 }
 
@@ -173,23 +207,26 @@ pub fn run() {
   let logs_for_setup = logs.clone();
 
   tauri::Builder::default()
+    .plugin(tauri_plugin_dialog::init())
     .setup(move |app| {
       let loaded = state::load_settings(app.handle());
-      {
-        let mut s = settings_for_setup.lock().await;
-        *s = loaded.clone();
-      }
-      let dsh_valid = loaded.dsh_directory.as_ref()
-        .map(|d| state::is_valid_dsh_root(std::path::Path::new(d)))
-        .unwrap_or(false);
-      if !dsh_valid {
-        let detected = state::detect_dsh_directory();
-        if let Some(ref dir) = detected {
-          append_log(&logs_for_setup, LogSource::Launcher, LogSeverity::Info, format!("Auto-detected DSH directory: {}", dir)).await;
+      tauri::async_runtime::block_on(async {
+        *settings_for_setup.lock().await = loaded.clone();
+        let locale = state::current_locale(&loaded);
+        let dsh_valid = loaded.dsh_directory.as_ref()
+          .map(|d| state::is_valid_dsh_root(std::path::Path::new(d)))
+          .unwrap_or(false);
+        if dsh_valid {
+          append_log(&logs_for_setup, LogSource::Launcher, LogSeverity::Info, state::t_log(&locale, "dsh.using", &[("dir", loaded.dsh_directory.as_deref().unwrap_or(""))])).await;
         } else {
-          append_log(&logs_for_setup, LogSource::Launcher, LogSeverity::Error, "Cannot identify the DSH directory on this system. Please specify the DSH directory in settings.").await;
+          let detected = state::detect_dsh_directory();
+          if let Some(ref dir) = detected {
+            append_log(&logs_for_setup, LogSource::Launcher, LogSeverity::Info, state::t_log(&locale, "dsh.detected", &[("dir", dir)])).await;
+          } else {
+            append_log(&logs_for_setup, LogSource::Launcher, LogSeverity::Error, state::t_log(&locale, "dsh.unknown", &[])).await;
+          }
         }
-      }
+      });
       let toggle = MenuItem::with_id(app, "toggle", "显示 / 隐藏", true, None::<&str>)?;
       let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
       let menu = Menu::with_items(app, &[&toggle, &quit])?;

@@ -32,10 +32,10 @@ async function pageFor(t, fixture = {}, viewport = { width: 560, height: 420 }) 
       statusError: fixture.statusError, hold: fixture.hold, reject: fixture.reject,
       output: fixture.output ?? { success: true, stdout: '', stderr: '' },
     }
-    const append = (source, message) => {
+    const append = (source, message, severity = 'info') => {
       const entries = window.fixture.status.logEntries
       const id = (entries.at(-1)?.id ?? 0) + 1
-      entries.push({ id, source, message })
+      entries.push({ id, source, severity, timestamp: new Date().toISOString(), message })
       if (entries.length > 200) entries.shift()
     }
     window.__TAURI_INTERNALS__ = {
@@ -44,17 +44,22 @@ async function pageFor(t, fixture = {}, viewport = { width: 560, height: 420 }) 
         const data = window.fixture
         data.calls.push({ command, args })
         if (command === 'plugin:app|version') return version
+        if (command === 'get_settings') return { dshDirectory: 'C:\\code\\deepseek-harness', theme: 'system', locale: 'zh' }
+        if (command === 'clear_logs') return undefined
+        if (command === 'open_directory_picker') return null
         if (command === 'get_status') {
           if (data.statusError) throw new Error(data.statusError)
-          return structuredClone(data.status)
+          const status = structuredClone(data.status)
+          if (!('dshDirectoryValid' in status)) status.dshDirectoryValid = true
+          return status
         }
         if (data.hold) await new Promise((resolve) => { data.release = resolve })
         if (data.reject) throw new Error(data.reject)
-        append('launcher', `Starting ${command}`)
+        append('launcher', `Starting command: ${command}`)
         for (const [source, text] of [['stdout', data.output.stdout], ['stderr', data.output.stderr]]) {
-          if (text) for (const line of text.trimEnd().split('\n')) append(source, line)
+          if (text) for (const line of text.trimEnd().split('\n')) append(source, line, source === 'stderr' ? 'warn' : 'info')
         }
-        append('launcher', `${command} ${data.output.success ? 'completed' : 'failed'}`)
+        append('launcher', `${command} ${data.output.success ? 'succeeded' : 'failed'}`)
         return data.output
       },
     }
@@ -134,7 +139,7 @@ test('managed restart and empty-output stop appear in the unified log', async (t
   for (const [name, command] of [['重启', 'restart_server'], ['停止', 'stop_server']]) {
     await page.getByRole('button', { name, exact: true }).click()
     await page.locator('.log-result').getByText('已完成', { exact: true }).waitFor()
-    await page.locator('.log-body').getByText(`${command} completed`, { exact: true }).waitFor()
+    await page.locator('.log-body').getByText(`${command} succeeded`, { exact: true }).waitFor()
     assert.equal((await callsFor(page, command)).length, 1)
   }
   assert.equal(await page.locator('[data-log-id]').count(), 4)
@@ -146,12 +151,12 @@ test('pending work cannot be submitted twice even across settings', async (t) =>
   await page.getByRole('button', { name: '安装', exact: true }).evaluate((button) => { button.click(); button.click() })
   await page.locator('.log-result').getByText('处理中', { exact: true }).waitFor()
   assert.equal((await callsFor(page, 'install_deps')).length, 1)
-  await page.getByRole('button', { name: '设置', exact: true }).click()
+  await page.getByRole('button', { name: '软件设置', exact: true }).click()
   assert.equal(await page.getByRole('button', { name: '构建', exact: true }).isDisabled(), true)
   await page.getByRole('button', { name: '运行日志', exact: true }).click()
   await page.evaluate(() => window.fixture.release())
   await page.locator('.log-result').getByText('已完成', { exact: true }).waitFor()
-  await page.locator('.log-body').getByText('install_deps completed', { exact: true }).waitFor()
+  await page.locator('.log-body').getByText('install_deps succeeded', { exact: true }).waitFor()
 })
 
 test('first and later status failures do not enable start', async (t) => {
@@ -170,21 +175,21 @@ test('IPC failures survive polls and switching settings', async (t) => {
   const page = await pageFor(t, { reject: 'Cannot execute command' })
   await page.getByRole('button', { name: '构建', exact: true }).click()
   await page.locator('.log-result').getByText('操作失败', { exact: true }).waitFor()
-  await page.getByRole('button', { name: '设置', exact: true }).click()
+  await page.getByRole('button', { name: '软件设置', exact: true }).click()
   await nextPoll(page)
   await page.getByRole('button', { name: '运行日志', exact: true }).click()
   await page.locator('.log-body').getByText('Cannot execute command', { exact: true }).waitFor()
 })
 
 test('same text with distinct IDs survives polls, and settings does not pause logs', async (t) => {
-  const logEntries = Array.from({ length: 200 }, (_, i) => ({ id: i + 1, source: 'stdout', message: `Repeated message ${'payload '.repeat(20)}` }))
+  const logEntries = Array.from({ length: 200 }, (_, i) => ({ id: i + 1, source: 'stdout', severity: 'info', timestamp: new Date().toISOString(), message: `Repeated message ${'payload '.repeat(20)}` }))
   const page = await pageFor(t, { status: { state: 'running-managed', pid: 4242, url: 'http://127.0.0.1:3080/', logEntries } })
   await nextPoll(page)
   assert.equal(await page.locator('[data-log-id]').count(), 200)
-  await page.getByRole('button', { name: '设置', exact: true }).click()
+  await page.getByRole('button', { name: '软件设置', exact: true }).click()
   await page.evaluate(() => {
     window.fixture.status.logEntries.shift()
-    window.fixture.status.logEntries.push({ id: 201, source: 'stdout', message: 'New log while settings is open' })
+    window.fixture.status.logEntries.push({ id: 201, source: 'stdout', severity: 'info', timestamp: new Date().toISOString(), message: 'New log while settings is open' })
   })
   await nextPoll(page)
   await page.getByRole('button', { name: '运行日志', exact: true }).click()
@@ -206,7 +211,7 @@ test('successful stderr and command output appear once without a failure badge',
 
 test('theme follows the system until explicitly selected, then persists on reload', async (t) => {
   const page = await pageFor(t)
-  await page.getByRole('button', { name: '设置', exact: true }).click()
+  await page.getByRole('button', { name: '软件设置', exact: true }).click()
   await page.emulateMedia({ colorScheme: 'dark' })
   await page.waitForFunction(() => document.documentElement.dataset.theme === 'dark')
   await screenshot(page, 'settings-dark-zh.png')
@@ -216,14 +221,14 @@ test('theme follows the system until explicitly selected, then persists on reloa
   assert.equal(await page.locator('html').getAttribute('data-theme'), 'light')
   await page.reload()
   await page.waitForFunction(() => document.documentElement.dataset.theme === 'light')
-  await page.getByRole('button', { name: '设置', exact: true }).click()
+  await page.getByRole('button', { name: '软件设置', exact: true }).click()
   await page.getByRole('button', { name: '跟随系统', exact: true }).click()
   await page.waitForFunction(() => document.documentElement.dataset.theme === 'dark')
 })
 
 test('language lives in settings, persists, and project link targets this directory', async (t) => {
   const page = await pageFor(t)
-  await page.getByRole('button', { name: '设置', exact: true }).click()
+  await page.getByRole('button', { name: '软件设置', exact: true }).click()
   await assertLayout(page, '.settings-panel')
   await screenshot(page, 'settings-light-zh.png')
   await page.getByRole('button', { name: 'English', exact: true }).click()

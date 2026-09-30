@@ -12,6 +12,16 @@ function initialTheme(): ThemePreference {
   }
 }
 
+/** True when the user has explicitly chosen a theme (it is persisted). */
+export function hasStoredTheme(): boolean {
+  try {
+    const value = localStorage.getItem(storageKey)
+    return value === 'light' || value === 'dark'
+  } catch {
+    return false
+  }
+}
+
 /** Persist the chosen theme and follow OS changes only in system mode. */
 export function useTheme() {
   const [theme, setTheme] = useState<ThemePreference>(initialTheme)

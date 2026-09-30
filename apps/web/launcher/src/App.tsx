@@ -11,7 +11,7 @@ import { TooltipHost } from './components/TooltipHost'
 import { TablerIcon } from './lib/TablerIcon'
 import { Button } from '@/components/ui/button'
 import { useServerStatus } from './hooks/useServerStatus'
-import { useTheme } from './hooks/useTheme'
+import { useTheme, hasStoredTheme } from './hooks/useTheme'
 import { useI18n, type TranslationKey } from './i18n'
 import {
   installDeps, buildFrontend, startServer, stopServer, restartServer, openUrl,
@@ -39,6 +39,7 @@ function App() {
   const [tab, setTab] = useState<'logs' | 'settings'>('logs')
   const [version, setVersion] = useState('')
   const [settings, setSettings] = useState<AppSettings | null>(null)
+  const [activeSetting, setActiveSetting] = useState<'dsh-directory' | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -50,7 +51,10 @@ function App() {
     void getSettings().then((result) => {
       if (!cancelled) {
         setSettings(result)
-        if (result.theme) setThemePreference(result.theme as 'light' | 'dark' | 'system')
+        // Only adopt the backend theme on first load. Once the user has
+        // explicitly picked a theme (persisted to localStorage), respect
+        // their choice instead of clobbering it on every refresh.
+        if (result.theme && !hasStoredTheme()) setThemePreference(result.theme as 'light' | 'dark' | 'system')
       }
     }).catch(() => {})
     return () => { cancelled = true }
@@ -100,7 +104,9 @@ function App() {
   const unavailable = loading || !status || Boolean(statusError || status.error)
   const onCommand = (name: LauncherCommand) => void runCommand(name, commands[name])
 
-  const dshDirectoryValid = !!(settings?.dshDirectory) && !status?.error
+  // The backend reports directory validity directly so the UI does not infer it
+  // from the presence of an error string.
+  const dshDirectoryValid = status?.dshDirectoryValid ?? false
 
   const handleThemeChange = (next: 'light' | 'dark' | 'system') => {
     setThemePreference(next)
@@ -131,7 +137,7 @@ function App() {
   }
   const handleCopyLogs = () => {
     const text = [
-      ...(status?.logEntries ?? []).map(e => `${e.timestamp} [${e.severity.toUpperCase()}] ${e.message}`),
+      ...(status?.logEntries ?? []).map(e => `${e.timestamp} [${t(`log.level.${e.severity}` as TranslationKey)}] ${e.message}`),
       ...uiErrors,
     ].join('\n')
     void navigator.clipboard.writeText(text)
@@ -171,7 +177,7 @@ function App() {
             error={statusError}
             dshDirectoryValid={dshDirectoryValid}
             onRetry={refresh}
-            onNavigateToSettings={() => setTab('settings')}
+            onNavigateToSettings={() => { setTab('settings'); setActiveSetting('dsh-directory') }}
           />
           <ControlPanel
             state={status?.state}
@@ -208,6 +214,7 @@ function App() {
               theme={theme}
               settings={settings}
               dshDirectoryValid={dshDirectoryValid}
+              activeSetting={activeSetting}
               onThemeChange={handleThemeChange}
               onDshDirectoryChange={handleDshDirectoryChange}
               onBrowseDshDirectory={handleBrowseDshDirectory}

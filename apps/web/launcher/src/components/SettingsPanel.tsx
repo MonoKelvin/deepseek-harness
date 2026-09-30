@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import { author, homepage } from '../../package.json'
 import { useI18n } from '../i18n'
 import type { ThemePreference } from '../hooks/useTheme'
@@ -10,6 +11,7 @@ interface SettingsPanelProps {
   theme: ThemePreference
   settings: AppSettings | null
   dshDirectoryValid: boolean
+  activeSetting: 'dsh-directory' | null
   onThemeChange: (theme: ThemePreference) => void
   onDshDirectoryChange: (path: string) => void
   onBrowseDshDirectory: () => void
@@ -18,12 +20,21 @@ interface SettingsPanelProps {
 }
 
 export function SettingsPanel({
-  version, theme, settings, dshDirectoryValid,
+  version, theme, settings, dshDirectoryValid, activeSetting,
   onThemeChange, onDshDirectoryChange, onBrowseDshDirectory, onLocaleChange, onOpenProject,
 }: SettingsPanelProps) {
   const { t, locale } = useI18n()
   const dshDirValue = settings?.dshDirectory ?? ''
   const dshDirInvalid = settings?.dshDirectory !== null && !dshDirectoryValid
+  const dshRowRef = useRef<HTMLDivElement>(null)
+
+  // When the "specify DSH directory" link is followed from the status area,
+  // scroll the matching row into view and clear the highlight after a delay.
+  useEffect(() => {
+    if (activeSetting === 'dsh-directory' && dshRowRef.current) {
+      dshRowRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }
+  }, [activeSetting])
 
   return (
     <section className="settings-panel" aria-label={t('settings.title')}>
@@ -36,7 +47,7 @@ export function SettingsPanel({
       </div>
 
       <div className="settings-fields">
-        <div className="setting-row">
+        <div className="setting-row" ref={dshRowRef} data-highlight={activeSetting === 'dsh-directory' ? 'dsh-directory' : undefined}>
           <div className="setting-label">
             <span>{t('settings.dshDirectory')}</span>
             <p className="setting-caption">{t('settings.dshDirectoryHint')}</p>

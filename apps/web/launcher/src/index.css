@@ -147,7 +147,28 @@
 .setting-error { grid-column: 2; margin-top: 2px; font-size: 11px; color: rgb(var(--destructive)); }
 .compact-choice { display: flex; gap: 2px; padding: 3px; border-radius: 12px; background: rgb(var(--muted)); }
 .compact-choice > button { height: 28px; padding: 0 10px; font-size: 12px; }
+.setting-row[data-highlight] {
+  outline: 2px solid rgb(var(--primary));
+  outline-offset: 2px;
+  border-radius: 6px;
+  animation: dsh-highlight-pulse 1.2s ease-out 3;
+}
+@keyframes dsh-highlight-pulse {
+  0% { box-shadow: 0 0 0 3px rgb(var(--primary) / 0.3); }
+  100% { box-shadow: 0 0 0 0 rgb(var(--primary) / 0); }
+}
 .settings-about { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; margin-top: 20px; color: rgb(var(--muted-foreground)); font-size: 12px; }
+.copy-toast {
+  position: absolute;
+  right: 12px;
+  top: 8px;
+  font-size: 11px;
+  color: rgb(var(--foreground));
+  opacity: 0;
+  transform: translateY(-4px);
+  transition: opacity 140ms ease, transform 140ms ease;
+  pointer-events: none;
+}
 .dsh-missing { margin-top: 8px; font-size: 12px; }
 .dsh-missing span { color: rgb(var(--destructive)); font-weight: 500; cursor: pointer; text-decoration: underline; }
 

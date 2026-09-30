@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 use std::io;
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 
@@ -7,6 +8,8 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
+
+use crate::state::{AppSettings, resolve_dsh_root};
 
 /// Current state of the server lifecycle.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -28,6 +31,7 @@ pub struct ServerStatusInfo {
   pub url: Option<String>,
   pub pid: Option<u32>,
   pub external: bool,
+  pub dsh_directory_valid: bool,
   pub log_entries: Vec<LogEntry>,
   pub error: Option<String>,
 }
@@ -129,10 +133,12 @@ pub async fn log_entries(logs: &SharedLogBuffer) -> Vec<LogEntry> {
 }
 
 /// Records an outcome without repeating the command's streamed output.
-pub async fn log_command_result(logs: &SharedLogBuffer, command: &str, result: Result<(), &str>) {
+/// `locale` selects the language for the outcome message; streamed pnpm output
+/// is intentionally left untranslated as tool output.
+pub async fn log_command_result(logs: &SharedLogBuffer, locale: &str, command: &str, result: Result<(), &str>) {
   let (severity, message) = match result {
-    Ok(()) => (LogSeverity::Info, format!("Command succeeded: {}", command)),
-    Err(error) => (LogSeverity::Error, format!("Command failed: {}: {}", command, error)),
+    Ok(()) => (LogSeverity::Info, crate::state::t_log(locale, "command.succeeded", &[("command", command)])),
+    Err(error) => (LogSeverity::Error, crate::state::t_log(locale, "command.failed", &[("command", command), ("error", error)])),
   };
   append_log(logs, LogSource::Launcher, severity, message).await;
 }
@@ -170,8 +176,8 @@ pub fn repo_root() -> String {
 }
 
 /// Resolve the DSH root from the user-configured directory or auto-detection.
-pub fn repo_root_from_settings(settings: &crate::state::AppSettings) -> String {
-  if let Some(path) = crate::state::resolve_dsh_root(settings) {
+pub fn repo_root_from_settings(settings: &AppSettings) -> String {
+  if let Some(path) = resolve_dsh_root(settings) {
     return path;
   }
   // In dev mode, the binary lives in target/debug/ — fall back to CWD
@@ -205,6 +211,7 @@ async fn read_stream(
   stream: impl AsyncRead + Unpin,
   logs: &SharedLogBuffer,
   source: LogSource,
+  locale: &str,
   mut captured: Option<&mut Vec<u8>>,
 ) -> io::Result<()> {
   let mut reader = BufReader::new(stream);
@@ -233,7 +240,9 @@ async fn read_stream(
       Ok(0) => return Ok(()),
       Ok(_) => {}
       Err(error) => {
-        append_log(logs, LogSource::Launcher, LogSeverity::Error, format!("Failed to read {}: {}", source, error)).await;
+        let source_str = source.to_string();
+        let message = crate::state::t_log(locale, "stream.read.failed", &[("source", &source_str), ("error", &error.to_string())]);
+        append_log(logs, LogSource::Launcher, LogSeverity::Error, message).await;
         return Err(error);
       }
     }
@@ -244,6 +253,7 @@ async fn drain_streams(
   stdout: impl AsyncRead + Unpin,
   stderr: impl AsyncRead + Unpin,
   logs: &SharedLogBuffer,
+  locale: &str,
   captured: Option<(&mut Vec<u8>, &mut Vec<u8>)>,
 ) -> (io::Result<()>, io::Result<()>) {
   let (stdout_capture, stderr_capture) = match captured {
@@ -251,15 +261,16 @@ async fn drain_streams(
     None => (None, None),
   };
   tokio::join!(
-    read_stream(stdout, logs, LogSource::Stdout, stdout_capture),
-    read_stream(stderr, logs, LogSource::Stderr, stderr_capture),
+    read_stream(stdout, logs, LogSource::Stdout, locale, stdout_capture),
+    read_stream(stderr, logs, LogSource::Stderr, locale, stderr_capture),
   )
 }
 
 /// Stream a short-lived pnpm command into shared logs and retain its output for the result.
 pub async fn run_pnpm(args: &[&str], logs: &SharedLogBuffer, settings: &crate::state::AppSettings) -> CommandOutput {
+  let locale = crate::state::current_locale(settings);
   let command = format!("pnpm {}", args.join(" "));
-  append_log(logs, LogSource::Launcher, LogSeverity::Info, format!("Starting command: {}", command)).await;
+  append_log(logs, LogSource::Launcher, LogSeverity::Info, crate::state::t_log(&locale, "command.start", &[("command", &command)])).await;
   let root = repo_root_from_settings(settings);
   let mut child = match tokio::process::Command::new("pnpm")
     .args(args)
@@ -271,7 +282,7 @@ pub async fn run_pnpm(args: &[&str], logs: &SharedLogBuffer, settings: &crate::s
     Ok(child) => child,
     Err(error) => {
       let error = format!("Failed to execute pnpm: {}", error);
-      log_command_result(logs, &command, Err(&error)).await;
+      log_command_result(logs, &locale, &command, Err(&error)).await;
       return CommandOutput { success: false, stdout: String::new(), stderr: error };
     }
   };
@@ -281,7 +292,7 @@ pub async fn run_pnpm(args: &[&str], logs: &SharedLogBuffer, settings: &crate::s
   let mut stdout_bytes = Vec::new();
   let mut stderr_bytes = Vec::new();
   let ((stdout_result, stderr_result), status) = tokio::join!(
-    drain_streams(stdout, stderr, logs, Some((&mut stdout_bytes, &mut stderr_bytes))),
+    drain_streams(stdout, stderr, logs, &locale, Some((&mut stdout_bytes, &mut stderr_bytes))),
     child.wait(),
   );
 
@@ -304,14 +315,15 @@ pub async fn run_pnpm(args: &[&str], logs: &SharedLogBuffer, settings: &crate::s
   let stdout = String::from_utf8_lossy(&stdout_bytes).into_owned();
   let stderr = String::from_utf8_lossy(&stderr_bytes).into_owned();
   let error = errors.join("; ");
-  log_command_result(logs, &command, if success { Ok(()) } else { Err(&error) }).await;
+  log_command_result(logs, &locale, &command, if success { Ok(()) } else { Err(&error) }).await;
   let stderr = if !success && stderr.is_empty() { error } else { stderr };
   CommandOutput { success, stdout, stderr }
 }
 
 /// Spawn `pnpm dsh web` and drain both output pipes concurrently.
 pub async fn start_dsh_web(manager: &mut ServerManager, settings: &crate::state::AppSettings) -> Result<u32, String> {
-  append_log(&manager.logs, LogSource::Launcher, LogSeverity::Info, "Starting command: pnpm dsh web").await;
+  let locale = crate::state::current_locale(settings);
+  append_log(&manager.logs, LogSource::Launcher, LogSeverity::Info, crate::state::t_log(&locale, "command.start", &[("command", "pnpm dsh web")])).await;
   let mut child = match tokio::process::Command::new("pnpm")
     .args(["dsh", "web"])
     .current_dir(repo_root_from_settings(settings))
@@ -322,7 +334,7 @@ pub async fn start_dsh_web(manager: &mut ServerManager, settings: &crate::state:
     Ok(child) => child,
     Err(error) => {
       let error = format!("Failed to start dsh web: {error}");
-      log_command_result(&manager.logs, "pnpm dsh web", Err(&error)).await;
+      log_command_result(&manager.logs, &locale, "pnpm dsh web", Err(&error)).await;
       return Err(error);
     }
   };
@@ -330,22 +342,24 @@ pub async fn start_dsh_web(manager: &mut ServerManager, settings: &crate::state:
   let stdout = child.stdout.take().expect("piped child stdout");
   let stderr = child.stderr.take().expect("piped child stderr");
   let logs = manager.logs.clone();
+  let locale_owned = locale.to_string();
   let log_handle = tokio::spawn(async move {
-    let _ = drain_streams(stdout, stderr, &logs, None).await;
+    let _ = drain_streams(stdout, stderr, &logs, &locale_owned, None).await;
   });
   manager.child = Some(child);
   manager.log_handle = Some(log_handle);
   manager.pid = Some(pid);
-  append_log(&manager.logs, LogSource::Launcher, LogSeverity::Info, format!("Process started (PID {pid})")).await;
+  append_log(&manager.logs, LogSource::Launcher, LogSeverity::Info, crate::state::t_log(&locale, "process.started", &[("pid", &pid.to_string())])).await;
   Ok(pid)
 }
 
 /// Stop the managed child, then dispose its output task before returning.
 pub async fn stop_dsh_web(manager: &mut ServerManager) -> Result<(), String> {
+  let locale = crate::state::current_locale(&crate::state::AppSettings::default());
   if let Some(child) = manager.child.as_mut() {
     if let Err(error) = child.kill().await {
       let error = format!("Failed to stop dsh web: {error}");
-      log_command_result(&manager.logs, "stop", Err(&error)).await;
+      log_command_result(&manager.logs, &locale, "stop", Err(&error)).await;
       return Err(error);
     }
   }
@@ -355,12 +369,13 @@ pub async fn stop_dsh_web(manager: &mut ServerManager) -> Result<(), String> {
   }
   manager.child = None;
   manager.pid = None;
-  log_command_result(&manager.logs, "stop", Ok(())).await;
+  let locale = crate::state::current_locale(&crate::state::AppSettings::default());
+  log_command_result(&manager.logs, &locale, "stop", Ok(())).await;
   Ok(())
 }
 
 /// Release the process lock before collecting logs and probing the port.
-pub async fn build_status(shared: &SharedManager) -> ServerStatusInfo {
+pub async fn build_status(shared: &SharedManager, dsh_directory_valid: bool) -> ServerStatusInfo {
   let (managed_alive, managed_pid, logs) = {
     let manager = shared.lock().await;
     (manager.child.is_some(), manager.pid, manager.logs.clone())
@@ -380,6 +395,7 @@ pub async fn build_status(shared: &SharedManager) -> ServerStatusInfo {
   };
   ServerStatusInfo {
     state, port: Some(DEFAULT_PORT), url, pid, external,
+    dsh_directory_valid,
     log_entries: log_entries(&logs).await,
     error: None,
   }
@@ -408,7 +424,7 @@ mod tests {
     let (stdout_reader, stdout_writer) = tokio::io::duplex(64);
     let (stderr_reader, mut stderr_writer) = tokio::io::duplex(64);
     let task_logs = logs.clone();
-    let task = tokio::spawn(async move { drain_streams(stdout_reader, stderr_reader, &task_logs, None).await });
+    let task = tokio::spawn(async move { drain_streams(stdout_reader, stderr_reader, &task_logs, "zh", None).await });
     stderr_writer.write_all(b"warning\n").await.unwrap();
     tokio::time::timeout(Duration::from_secs(1), async {
       while log_entries(&logs).await.is_empty() { tokio::task::yield_now().await; }
@@ -431,7 +447,7 @@ mod tests {
   #[tokio::test]
   async fn stream_failures_are_recorded() {
     let logs = new_log_buffer();
-    assert!(read_stream(BrokenReader, &logs, LogSource::Stdout, None).await.is_err());
+    assert!(read_stream(BrokenReader, &logs, LogSource::Stdout, "zh", None).await.is_err());
     assert!(log_entries(&logs).await[0].message.contains("read failed"));
     assert_eq!(log_entries(&logs).await[0].severity, LogSeverity::Error);
   }
@@ -439,8 +455,8 @@ mod tests {
   #[tokio::test]
   async fn success_without_output_still_produces_a_record() {
     let logs = new_log_buffer();
-    log_command_result(&logs, "build", Ok(())).await;
-    assert_eq!(log_entries(&logs).await[0].message, "Command succeeded: build");
+    log_command_result(&logs, "zh", "build", Ok(())).await;
+    assert!(log_entries(&logs).await[0].message.contains("build"));
     assert_eq!(log_entries(&logs).await[0].severity, LogSeverity::Info);
   }
 }
