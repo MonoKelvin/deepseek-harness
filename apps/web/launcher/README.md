@@ -19,7 +19,9 @@ A standalone Tauri GUI application for managing the DeepSeek Harness web develop
 
 The main button starts a stopped service or opens a running service. Stop and Restart are available only for a service managed by this launcher. Install dependencies and Build pages are available while the service is stopped.
 
-Activity shows the latest operation result, including failures and successful operations without output. Install and build output arrives after the operation finishes. Server logs shows the latest server log snapshot without duplicating lines on each refresh.
+The Logs tab combines the latest 200 backend and frontend entries, including IPC failures. Warnings and errors stay in the log rather than opening dialogs or toasts. The status badge contains a localized error tooltip; an unavailable status can be retried there. Log timestamps show UTC time to milliseconds, with the full timestamp in the tooltip and copied text. Copy and Clear share the tab toolbar; clearing removes both frontend and backend entries. Install and build output arrives after the operation finishes.
+
+App settings shows the version beside the application name, with left-aligned labels and right-aligned controls. Choose the DSH project root using the button inside the path input, or type a path and save it with Enter or by leaving the field. Appearance and language preferences are persisted.
 
 The launcher detects listeners on port 3080. A service started outside the launcher can be opened, but cannot be stopped or restarted here.
 

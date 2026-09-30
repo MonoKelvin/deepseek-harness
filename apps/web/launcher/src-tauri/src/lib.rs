@@ -5,6 +5,7 @@ use tauri::{
   tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
   AppHandle, Manager, State, WindowEvent,
 };
+use tokio::sync::Mutex;
 
 use process::{
   append_log, build_status, clear_logs as clear_log_buffer, log_command_result, run_pnpm,
@@ -28,24 +29,12 @@ pub struct AppState {
 #[tauri::command]
 async fn get_status(state: State<'_, AppState>) -> Result<ServerStatusInfo, String> {
   let settings = state.settings.lock().await.clone();
-  let user_specified = settings.dsh_directory.is_some();
   let dsh_valid = state::resolve_dsh_root(&settings).is_some();
-  // When the user has specified a directory that is not a valid DSH root,
-  // surface a structured error so the frontend can disable controls.
-  if user_specified && !dsh_valid {
-    append_log(
-      &state.logs,
-      LogSource::Launcher,
-      LogSeverity::Error,
-      state::t_log(&state::current_locale(&settings), "dsh.unknown", &[]),
-    )
-    .await;
-  }
   let mut info = build_status(&state.manager, dsh_valid).await;
   info.error = if dsh_valid {
     None
   } else {
-    Some("DSH directory not configured".to_string())
+    Some(state::t_log(&state::current_locale(&settings), "dsh.unknown", &[]))
   };
   Ok(info)
 }
@@ -202,36 +191,45 @@ fn toggle_main_window(app: &AppHandle) {
 pub fn run() {
   let manager = ServerManager::new();
   let logs = manager.logs.clone();
-  let settings = Arc::new(tokio::sync::Mutex::new(AppSettings::default()));
-  let settings_for_setup = settings.clone();
-  let logs_for_setup = logs.clone();
+  let settings = Arc::new(Mutex::new(AppSettings::default()));
 
   tauri::Builder::default()
     .plugin(tauri_plugin_dialog::init())
+    .manage(AppState {
+      manager: Arc::new(Mutex::new(manager)),
+      logs: logs.clone(),
+      settings,
+    })
     .setup(move |app| {
       let loaded = state::load_settings(app.handle());
+      let state = app.state::<AppState>();
       tauri::async_runtime::block_on(async {
-        *settings_for_setup.lock().await = loaded.clone();
+        *state.settings.lock().await = loaded.clone();
         let locale = state::current_locale(&loaded);
         let dsh_valid = loaded.dsh_directory.as_ref()
           .map(|d| state::is_valid_dsh_root(std::path::Path::new(d)))
           .unwrap_or(false);
         if dsh_valid {
-          append_log(&logs_for_setup, LogSource::Launcher, LogSeverity::Info, state::t_log(&locale, "dsh.using", &[("dir", loaded.dsh_directory.as_deref().unwrap_or(""))])).await;
+          append_log(&logs, LogSource::Launcher, LogSeverity::Info, state::t_log(&locale, "dsh.using", &[("dir", loaded.dsh_directory.as_deref().unwrap_or(""))])).await;
         } else {
           let detected = state::detect_dsh_directory();
           if let Some(ref dir) = detected {
-            append_log(&logs_for_setup, LogSource::Launcher, LogSeverity::Info, state::t_log(&locale, "dsh.detected", &[("dir", dir)])).await;
+            append_log(&logs, LogSource::Launcher, LogSeverity::Info, state::t_log(&locale, "dsh.detected", &[("dir", dir)])).await;
           } else {
-            append_log(&logs_for_setup, LogSource::Launcher, LogSeverity::Error, state::t_log(&locale, "dsh.unknown", &[])).await;
+            append_log(&logs, LogSource::Launcher, LogSeverity::Error, state::t_log(&locale, "dsh.unknown", &[])).await;
           }
         }
       });
       let toggle = MenuItem::with_id(app, "toggle", "显示 / 隐藏", true, None::<&str>)?;
       let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
       let menu = Menu::with_items(app, &[&toggle, &quit])?;
+      // Dedicated high-contrast tray asset: the app logo is a pale illustration that
+      // reads as near-white and vanishes on the Windows light notification area. This
+      // 32x32 brand-blue whale glyph stays legible on both light and dark trays.
+      let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../../public/tray-icon.png"))
+        .map_err(|e| format!("Failed to load tray icon: {e}"))?;
       TrayIconBuilder::new()
-        .icon(app.default_window_icon().expect("bundled window icon").clone())
+        .icon(tray_icon)
         .tooltip("DSH 启动器")
         .menu(&menu)
         .show_menu_on_left_click(false)
@@ -253,10 +251,6 @@ pub fn run() {
       Ok(())
     })
     .on_window_event(|window, event| {
-      #[cfg(target_os = "windows")]
-      if matches!(event, WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. }) {
-        if let Err(error) = window::update_region(window) { eprintln!("Failed to update window region: {error}"); }
-      }
       if let WindowEvent::CloseRequested { api, .. } = event {
         api.prevent_close();
         let _ = window.hide();

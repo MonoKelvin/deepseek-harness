@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type PointerEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type PointerEvent } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { getVersion } from '@tauri-apps/api/app'
 import { homepage } from '../package.json'
@@ -18,6 +18,14 @@ import {
   getSettings, setDshDirectory, clearLogs, setTheme, setLocale, openDirectoryPicker,
   type CommandOutput, type AppSettings,
 } from './lib/tauri-api'
+import type { LogEntry } from './types/server-status'
+
+interface UiError {
+  id: number
+  timestamp: string
+  action: TranslationKey
+  detail: string
+}
 
 const commandLabels: Record<LauncherCommand, TranslationKey> = {
   install: 'controls.install', build: 'controls.build', start: 'controls.start',
@@ -35,30 +43,53 @@ function App() {
   const commandPending = useRef(false)
   const [activeCommand, setActiveCommand] = useState<LauncherCommand | null>(null)
   const [commandSuccess, setCommandSuccess] = useState<boolean | null>(null)
-  const [uiErrors, setUiErrors] = useState<string[]>([])
   const [tab, setTab] = useState<'logs' | 'settings'>('logs')
   const [version, setVersion] = useState('')
   const [settings, setSettings] = useState<AppSettings | null>(null)
-  const [activeSetting, setActiveSetting] = useState<'dsh-directory' | null>(null)
+  const [uiErrors, setUiErrors] = useState<UiError[]>([])
+  const nextErrorId = useRef(-1)
+
+  const reportError = useCallback((action: TranslationKey, error: unknown) => {
+    // Negative IDs keep IPC-independent errors distinct from backend entries.
+    const entry = { id: nextErrorId.current--, timestamp: new Date().toISOString(), action, detail: errorMessage(error) }
+    setUiErrors(previous => [...previous.slice(-199), entry])
+  }, [])
+
+  useEffect(() => {
+    if (statusError) reportError('status.title', statusError)
+  }, [statusError, reportError])
 
   useEffect(() => {
     let cancelled = false
     void getVersion().then((value) => {
       if (!cancelled) setVersion(value)
     }).catch((error) => {
-      if (!cancelled) setUiErrors(previous => [...previous, errorMessage(error)].slice(-20))
+      if (!cancelled) reportError('settings.version', error)
     })
     void getSettings().then((result) => {
       if (!cancelled) {
         setSettings(result)
-        // Only adopt the backend theme on first load. Once the user has
-        // explicitly picked a theme (persisted to localStorage), respect
-        // their choice instead of clobbering it on every refresh.
         if (result.theme && !hasStoredTheme()) setThemePreference(result.theme as 'light' | 'dark' | 'system')
       }
-    }).catch(() => {})
+    }).catch((error) => {
+      if (!cancelled) reportError('settings.title', error)
+    })
     return () => { cancelled = true }
-  }, [])
+  }, [reportError, setThemePreference])
+
+  const logEntries: LogEntry[] = [
+    ...(status?.logEntries ?? []),
+    ...uiErrors.map<LogEntry>(entry => ({
+      id: entry.id,
+      source: 'launcher',
+      severity: 'error',
+      timestamp: entry.timestamp,
+      message: t('log.operationFailed', {
+        action: t(entry.action),
+        error: entry.detail.includes('state not managed') ? t('status.stateNotManaged') : entry.detail,
+      }),
+    })),
+  ].sort((left, right) => left.timestamp.replace('T', ' ').localeCompare(right.timestamp.replace('T', ' '))).slice(-200)
 
   const runCommand = async (name: LauncherCommand, command: () => Promise<CommandOutput>) => {
     if (commandPending.current) return
@@ -70,8 +101,7 @@ function App() {
       const output = await command()
       setCommandSuccess(output.success)
     } catch (error) {
-      const message = errorMessage(error)
-      setUiErrors(previous => [...previous, message].slice(-20))
+      reportError(commandLabels[name], error)
       setCommandSuccess(false)
     } finally {
       commandPending.current = false
@@ -97,50 +127,47 @@ function App() {
     try {
       await getCurrentWindow().hide()
     } catch (error) {
-      setUiErrors(previous => [...previous, errorMessage(error)].slice(-20))
+      reportError('titlebar.close', error)
       setTab('logs')
     }
   }
   const unavailable = loading || !status || Boolean(statusError || status.error)
   const onCommand = (name: LauncherCommand) => void runCommand(name, commands[name])
-
-  // The backend reports directory validity directly so the UI does not infer it
-  // from the presence of an error string.
   const dshDirectoryValid = status?.dshDirectoryValid ?? false
 
   const handleThemeChange = (next: 'light' | 'dark' | 'system') => {
     setThemePreference(next)
-    void setTheme(next)
+    void setTheme(next).catch(error => reportError('settings.theme', error))
   }
   const handleDshDirectoryChange = (path: string) => {
     void setDshDirectory(path).then((result) => {
       setSettings(result)
       refresh()
-    })
+    }).catch(error => reportError('settings.dshDirectory', error))
   }
   const handleBrowseDshDirectory = () => {
     void openDirectoryPicker().then((path) => {
-      if (path) {
-        void setDshDirectory(path).then((result) => {
-          setSettings(result)
-          refresh()
-        })
-      }
-    })
+      if (path) handleDshDirectoryChange(path)
+    }).catch(error => reportError('settings.dshDirectoryBrowse', error))
   }
   const handleLocaleChange = (next: 'zh' | 'en') => {
     setLocalePreference(next)
-    void setLocale(next)
+    void setLocale(next).catch(error => reportError('settings.language', error))
   }
   const handleClearLogs = () => {
-    void clearLogs().then(() => refresh())
+    void clearLogs().then(() => {
+      setUiErrors([])
+      setCommandSuccess(null)
+      refresh()
+    }).catch(error => reportError('log.clear', error))
   }
-  const handleCopyLogs = () => {
-    const text = [
-      ...(status?.logEntries ?? []).map(e => `${e.timestamp} [${t(`log.level.${e.severity}` as TranslationKey)}] ${e.message}`),
-      ...uiErrors,
-    ].join('\n')
-    void navigator.clipboard.writeText(text)
+  const handleCopyLogs = async () => {
+    const text = logEntries.map(entry => `${entry.timestamp} [${t(`log.level.${entry.severity}`)}] ${entry.message}`).join('\n')
+    try {
+      await navigator.clipboard.writeText(text)
+    } catch (error) {
+      reportError('log.copy', error)
+    }
   }
 
   const moveBackdrop = (event: PointerEvent<HTMLDivElement>) => {
@@ -175,9 +202,7 @@ function App() {
             status={status}
             loading={loading}
             error={statusError}
-            dshDirectoryValid={dshDirectoryValid}
             onRetry={refresh}
-            onNavigateToSettings={() => { setTab('settings'); setActiveSetting('dsh-directory') }}
           />
           <ControlPanel
             state={status?.state}
@@ -194,27 +219,33 @@ function App() {
               <Button variant="tab" size="sm" aria-pressed={tab === 'logs'} onClick={() => setTab('logs')}>{t('log.title')}</Button>
               <Button variant="tab" size="sm" aria-pressed={tab === 'settings'} onClick={() => setTab('settings')}>{t('settings.title')}</Button>
             </div>
-            {tab === 'logs' && (activeCommand || commandSuccess !== null) && (
-              <span className="log-result" data-failed={commandSuccess === false} role="status">
-                <TablerIcon name={activeCommand ? 'loader' : commandSuccess ? 'check' : 'alert'} size={13} className={activeCommand ? 'animate-spin' : undefined} />
-                {activeCommand ? t('controls.working') : t(commandSuccess ? 'log.completed' : 'log.failed')}
-              </span>
+            {tab === 'logs' && (
+              <div className="toolbar-actions">
+                {(activeCommand || commandSuccess !== null) && (
+                  <span className="log-result" data-failed={commandSuccess === false} role="status">
+                    <TablerIcon name={activeCommand ? 'loader' : commandSuccess ? 'check' : 'alert'} size={13} className={activeCommand ? 'animate-spin' : undefined} />
+                    {activeCommand ? t('controls.working') : t(commandSuccess ? 'log.completed' : 'log.failed')}
+                  </span>
+                )}
+                <Button variant="ghost" size="sm" onClick={handleClearLogs} aria-label={t('log.clear')} data-tooltip={t('log.clear')}>
+                  <TablerIcon name="trash" size={14} />
+                </Button>
+                <Button variant="ghost" size="sm" onClick={handleCopyLogs} aria-label={t('log.copy')} data-tooltip={t('log.copy')}>
+                  <TablerIcon name="copy" size={14} />
+                </Button>
+              </div>
             )}
           </div>
           {tab === 'logs'
             ? <LogViewer
-              entries={status?.logEntries ?? []}
-              errors={uiErrors}
+              entries={logEntries}
               activeLabel={activeCommand ? t(commandLabels[activeCommand]) : undefined}
-              onClear={handleClearLogs}
-              onCopy={handleCopyLogs}
             />
             : <SettingsPanel
               version={version}
               theme={theme}
               settings={settings}
-              dshDirectoryValid={dshDirectoryValid}
-              activeSetting={activeSetting}
+              dshDirectoryValid={status?.dshDirectoryValid}
               onThemeChange={handleThemeChange}
               onDshDirectoryChange={handleDshDirectoryChange}
               onBrowseDshDirectory={handleBrowseDshDirectory}

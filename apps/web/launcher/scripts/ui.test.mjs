@@ -30,23 +30,52 @@ async function pageFor(t, fixture = {}, viewport = { width: 560, height: 420 }) 
       calls: [],
       status: { state: 'stopped', port: 3080, url: null, pid: null, external: false, logEntries: [], error: null, ...fixture.status },
       statusError: fixture.statusError, hold: fixture.hold, reject: fixture.reject,
+      settings: { dshDirectory: 'C:\\code\\deepseek-harness', theme: 'system', locale: 'zh', ...fixture.settings },
+      failures: fixture.failures ?? {},
+      pickedDirectory: fixture.pickedDirectory ?? null,
+      directoryValid: fixture.directoryValid ?? true,
+      clipboardError: fixture.clipboardError,
+      copiedText: null,
       output: fixture.output ?? { success: true, stdout: '', stderr: '' },
     }
+    let nextLogId = Math.max(0, ...window.fixture.status.logEntries.map(entry => entry.id)) + 1
     const append = (source, message, severity = 'info') => {
       const entries = window.fixture.status.logEntries
-      const id = (entries.at(-1)?.id ?? 0) + 1
-      entries.push({ id, source, severity, timestamp: new Date().toISOString(), message })
+      entries.push({ id: nextLogId++, source, severity, timestamp: new Date().toISOString(), message })
       if (entries.length > 200) entries.shift()
     }
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: {
+      writeText: async text => {
+        if (window.fixture.clipboardError) throw new Error(window.fixture.clipboardError)
+        window.fixture.copiedText = text
+      },
+    } })
     window.__TAURI_INTERNALS__ = {
       metadata: { currentWindow: { label: 'main' } },
       invoke: async (command, args) => {
         const data = window.fixture
         data.calls.push({ command, args })
+        if (data.failures[command]) throw new Error(data.failures[command])
         if (command === 'plugin:app|version') return version
-        if (command === 'get_settings') return { dshDirectory: 'C:\\code\\deepseek-harness', theme: 'system', locale: 'zh' }
-        if (command === 'clear_logs') return undefined
-        if (command === 'open_directory_picker') return null
+        if (command === 'get_settings') return structuredClone(data.settings)
+        if (command === 'clear_logs') {
+          data.status.logEntries = []
+          return
+        }
+        if (command === 'open_directory_picker') return data.pickedDirectory
+        if (command === 'set_dsh_directory') {
+          data.settings.dshDirectory = args.path
+          data.status.dshDirectoryValid = data.directoryValid
+          return structuredClone(data.settings)
+        }
+        if (command === 'set_theme') {
+          data.settings.theme = args.theme
+          return
+        }
+        if (command === 'set_locale') {
+          data.settings.locale = args.locale
+          return
+        }
         if (command === 'get_status') {
           if (data.statusError) throw new Error(data.statusError)
           const status = structuredClone(data.status)
@@ -178,7 +207,7 @@ test('IPC failures survive polls and switching settings', async (t) => {
   await page.getByRole('button', { name: '软件设置', exact: true }).click()
   await nextPoll(page)
   await page.getByRole('button', { name: '运行日志', exact: true }).click()
-  await page.locator('.log-body').getByText('Cannot execute command', { exact: true }).waitFor()
+  await page.locator('.log-body').getByText('构建失败：Cannot execute command', { exact: true }).waitFor()
 })
 
 test('same text with distinct IDs survives polls, and settings does not pause logs', async (t) => {
@@ -235,11 +264,173 @@ test('language lives in settings, persists, and project link targets this direct
   await page.getByRole('heading', { name: 'Local service', exact: true }).waitFor()
   await assertLayout(page, '.settings-panel')
   await screenshot(page, 'settings-light-en.png')
-  assert.equal(await page.locator('.settings-about').innerText().then((text) => text.includes(`v${metadata.version}`)), true)
+  assert.equal(await page.locator('.settings-app-version').innerText(), `v${metadata.version}`)
+  assert.equal(await page.locator('.settings-about').innerText().then((text) => text.includes(`v${metadata.version}`)), false)
   await page.getByRole('button', { name: 'GitHub', exact: true }).click()
   assert.deepEqual((await callsFor(page, 'open_url')).at(-1).args, { url: metadata.homepage })
   await page.reload()
   await page.getByRole('heading', { name: 'Local service', exact: true }).waitFor()
+})
+
+for (const locale of ['zh', 'en']) {
+  test(`${locale} log snapshot uses compact columns and one toolbar without toasts`, async (t) => {
+    const logEntries = [
+      { id: 1, source: 'stdout', severity: 'info', timestamp: '2026-09-30 06:07:08.123', message: 'Server ready' },
+      { id: 2, source: 'stderr', severity: 'warn', timestamp: '2026-09-30 06:07:09.456', message: 'Optional configuration missing' },
+    ]
+    const levels = locale === 'zh' ? ['信息', '警告'] : ['Info', 'Warning']
+    const page = await pageFor(t, { locale, status: { logEntries } })
+    assert.deepEqual(await page.locator('.log-line').evaluateAll(lines => lines.map(line => [...line.children].map(node => node.textContent))), [
+      ['06:07:08.123', levels[0], 'Server ready'],
+      ['06:07:09.456', levels[1], 'Optional configuration missing'],
+    ])
+    assert.equal(await page.locator('.log-timestamp').first().getAttribute('data-tooltip'), '2026-09-30 06:07:08.123 UTC')
+    for (const width of [600, 360]) {
+      await page.setViewportSize({ width, height: 480 })
+      const measures = await page.evaluate(() => {
+        const tabs = document.querySelector('.panel-tabs').getBoundingClientRect()
+        const actions = document.querySelector('.toolbar-actions').getBoundingClientRect()
+        const toolbar = document.querySelector('.details-toolbar').getBoundingClientRect()
+        const [time, level, message] = [...document.querySelector('.log-line').children].map(node => node.getBoundingClientRect())
+        return { centerDelta: Math.abs(tabs.y + tabs.height / 2 - actions.y - actions.height / 2), right: actions.right, edge: toolbar.right, gaps: [level.left - time.right, message.left - level.right] }
+      })
+      assert.ok(measures.centerDelta < 1)
+      assert.ok(measures.right <= measures.edge)
+      for (const gap of measures.gaps) assert.ok(gap >= 5 && gap <= 7, `column gap: ${gap}`)
+      await assertLayout(page)
+    }
+    await screenshot(page, `compact-logs-${locale}.png`)
+    await page.getByRole('button', { name: locale === 'zh' ? '复制日志' : 'Copy logs', exact: true }).click()
+    await page.waitForFunction(() => window.fixture.copiedText !== null)
+    assert.equal(await page.evaluate(() => window.fixture.copiedText), logEntries.map((entry, index) => `${entry.timestamp} [${levels[index]}] ${entry.message}`).join('\n'))
+    assert.equal(await page.locator('[class*="toast"], [role="dialog"], [role="alertdialog"]').count(), 0)
+    await page.getByRole('button', { name: locale === 'zh' ? '清空日志' : 'Clear logs', exact: true }).click()
+    await page.locator('.log-empty').waitFor()
+    await nextPoll(page)
+    assert.equal(await page.locator('.log-line').count(), 0)
+    await page.getByRole('button', { name: locale === 'zh' ? '软件设置' : 'App settings', exact: true }).click()
+    assert.equal(await page.locator('.toolbar-actions').count(), 0)
+  })
+
+  test(`${locale} directory error stays inside the status badge with a localized tooltip`, async (t) => {
+    const page = await pageFor(t, { locale, status: { dshDirectoryValid: false, error: 'DSH directory not configured' } }, { width: 360, height: 480 })
+    const explanation = locale === 'zh'
+      ? 'DSH 目录未配置或无效，请在软件设置中指定项目根目录。'
+      : 'The DSH directory is missing or invalid. Select the project root in App settings.'
+    const icon = page.locator('.service-state .status-error-icon')
+    assert.equal(await icon.count(), 1)
+    assert.equal(await icon.getAttribute('aria-label'), explanation)
+    assert.equal(await page.locator('.service').innerText().then(text => text.includes('DSH directory not configured')), false)
+    assert.equal(await page.locator('.status-error, .dsh-missing, .service a').count(), 0)
+    const fits = await icon.evaluate(node => {
+      const icon = node.getBoundingClientRect()
+      const badge = node.parentElement.getBoundingClientRect()
+      const heading = node.closest('.service-heading').getBoundingClientRect()
+      return icon.left >= badge.left && icon.right <= badge.right && icon.top >= badge.top && icon.bottom <= badge.bottom && badge.right <= heading.right
+    })
+    assert.equal(fits, true)
+    await icon.focus()
+    await page.getByRole('tooltip').getByText(explanation, { exact: true }).waitFor()
+    await screenshot(page, `status-error-${locale}.png`)
+    await page.keyboard.press('Escape')
+    await page.locator('[role="tooltip"]:visible').waitFor({ state: 'hidden' })
+  })
+
+  test(`${locale} settings align controls, embed the picker and save complete directory edits`, async (t) => {
+    const longPath = 'C:\\workspaces\\projects\\a-very-long-directory\\deepseek-harness'
+    const page = await pageFor(t, { locale, settings: { dshDirectory: longPath } })
+    await page.getByRole('button', { name: locale === 'zh' ? '软件设置' : 'App settings', exact: true }).click()
+    assert.deepEqual(await page.locator('.setting-label').evaluateAll(labels => labels.map(label => label.innerText.split('\n').filter(Boolean))), locale === 'zh'
+      ? [['DSH目录', '项目根目录'], ['外观'], ['语言', '界面显示语言']]
+      : [['DSH directory', 'Project root'], ['Appearance'], ['Language', 'Display language']])
+    assert.equal(await page.locator('.settings-app-version').innerText(), `v${metadata.version}`)
+    assert.equal(await page.locator('.settings-app-description').innerText(), locale === 'zh'
+      ? '简介：启动和管理本地 Web 服务。'
+      : 'About: Start and manage the local web service.')
+    for (const width of [600, 360]) {
+      await page.setViewportSize({ width, height: 480 })
+      const rows = await page.locator('.setting-row').evaluateAll(rows => rows.map(row => {
+        const label = row.querySelector('.setting-label')
+        const value = row.querySelector('.setting-control').firstElementChild
+        const bounds = row.getBoundingClientRect()
+        const caption = row.querySelector('.setting-caption')
+        const range = document.createRange()
+        if (caption) range.selectNodeContents(caption)
+        return {
+          leftDelta: Math.abs(label.getBoundingClientRect().left - bounds.left),
+          rightDelta: Math.abs(value.getBoundingClientRect().right - bounds.right),
+          textAlign: getComputedStyle(label).textAlign,
+          captionFits: !caption || (range.getBoundingClientRect().width <= label.clientWidth + 1 && caption.getBoundingClientRect().height <= parseFloat(getComputedStyle(caption).lineHeight) + 1),
+        }
+      }))
+      for (const row of rows) {
+        assert.ok(row.leftDelta < 1 && row.rightDelta < 1, JSON.stringify(row))
+        assert.equal(row.textAlign, 'left')
+        assert.equal(row.captionFits, true)
+      }
+      const inputLayout = await page.locator('.setting-input').evaluate(input => {
+        const bounds = input.getBoundingClientRect()
+        const button = input.parentElement.querySelector('button').getBoundingClientRect()
+        const style = getComputedStyle(input)
+        return { inside: button.left >= bounds.left && button.right <= bounds.right && button.top >= bounds.top && button.bottom <= bounds.bottom, gap: button.left - (bounds.right - parseFloat(style.paddingRight)), align: style.textAlign }
+      })
+      assert.equal(inputLayout.inside, true)
+      assert.ok(inputLayout.gap >= 6)
+      assert.equal(inputLayout.align, 'right')
+      await assertLayout(page, '.settings-panel')
+    }
+    await screenshot(page, `compact-settings-${locale}.png`)
+    const input = page.getByRole('textbox', { name: locale === 'zh' ? 'DSH目录' : 'DSH directory', exact: true })
+    const path = 'C:\\projects\\deepseek-harness'
+    await input.fill(path)
+    assert.equal((await callsFor(page, 'set_dsh_directory')).length, 0)
+    await input.press('Enter')
+    await page.waitForFunction(() => window.fixture.calls.filter(call => call.command === 'set_dsh_directory').length === 1)
+    assert.deepEqual((await callsFor(page, 'set_dsh_directory'))[0].args, { path })
+    const picker = page.getByRole('button', { name: locale === 'zh' ? '选择 DSH 目录' : 'Choose DSH directory', exact: true })
+    await picker.click()
+    assert.equal((await callsFor(page, 'set_dsh_directory')).length, 1)
+    await page.evaluate(path => { window.fixture.pickedDirectory = path }, longPath)
+    await picker.click()
+    await page.waitForFunction(path => document.querySelector('.setting-input').value === path, longPath)
+    assert.equal((await callsFor(page, 'set_dsh_directory')).length, 2)
+  })
+}
+
+test('status errors are translated, retained, and not repeated on every failed poll', async (t) => {
+  const page = await pageFor(t, { statusError: 'state not managed for field `state` on command `get_status`' })
+  await page.locator('.log-message').getByText('本地服务失败：启动器状态尚未初始化，请重启启动器。', { exact: true }).waitFor()
+  await nextPoll(page)
+  assert.equal(await page.locator('.log-line').count(), 1)
+  assert.equal(await page.locator('.status-error-icon').getAttribute('data-tooltip'), '启动器状态尚未初始化，请重启启动器。')
+  await page.getByRole('button', { name: '软件设置', exact: true }).click()
+  assert.equal(await page.locator('.setting-input').getAttribute('aria-invalid'), 'false')
+  await page.getByRole('button', { name: 'English', exact: true }).click()
+  await page.getByRole('button', { name: 'Logs', exact: true }).click()
+  await page.locator('.log-message').getByText('Local service failed: The launcher state is not initialized. Restart the launcher.', { exact: true }).waitFor()
+  assert.equal(await page.locator('.log-line').count(), 1)
+})
+
+test('clipboard, clear, settings and picker failures remain visible as logs', async (t) => {
+  const page = await pageFor(t, {
+    clipboardError: 'Clipboard unavailable',
+    failures: { clear_logs: 'Cannot clear', set_theme: 'Cannot save theme', open_directory_picker: 'Cannot open picker' },
+  })
+  await page.getByRole('button', { name: '复制日志', exact: true }).click()
+  await page.locator('.log-message').getByText('复制日志失败：Clipboard unavailable', { exact: true }).waitFor()
+  await page.getByRole('button', { name: '清空日志', exact: true }).click()
+  await page.locator('.log-message').getByText('清空日志失败：Cannot clear', { exact: true }).waitFor()
+  await page.getByRole('button', { name: '软件设置', exact: true }).click()
+  await page.getByRole('button', { name: '浅色', exact: true }).click()
+  await page.getByRole('button', { name: '选择 DSH 目录', exact: true }).click()
+  await page.getByRole('button', { name: '运行日志', exact: true }).click()
+  for (const text of ['外观失败：Cannot save theme', '选择 DSH 目录失败：Cannot open picker']) await page.locator('.log-message').getByText(text, { exact: true }).waitFor()
+  await nextPoll(page)
+  assert.equal(await page.locator('.log-line[data-severity="error"]').count(), 4)
+  assert.equal(await page.locator('[class*="toast"], [role="dialog"], [role="alertdialog"]').count(), 0)
+  await page.evaluate(() => { window.fixture.failures = {} })
+  await page.getByRole('button', { name: '清空日志', exact: true }).click()
+  await page.locator('.log-empty').waitFor()
 })
 
 test('one delegated tooltip handles viewport edges, dynamic content and removal', async (t) => {

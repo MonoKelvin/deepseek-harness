@@ -26,12 +26,12 @@ fullscreen = false
 maximized = false
 minimizable = false
 center = true
-skip-taskbar = true
+skip-taskbar = false
 title = "DSH 启动器"
 decorations = false
-shadow = false
+shadow = true
 visible = false
-transparent = true
+transparent = false
 drag-drop-enabled = false
 
 [app.security]

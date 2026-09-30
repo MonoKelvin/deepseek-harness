@@ -1,4 +1,4 @@
-import { useLayoutEffect, useState } from 'react'
+import { useCallback, useLayoutEffect, useState } from 'react'
 
 export type ThemePreference = 'system' | 'light' | 'dark'
 const storageKey = 'dsh-launcher-theme'
@@ -38,14 +38,14 @@ export function useTheme() {
     return () => media.removeEventListener('change', apply)
   }, [theme])
 
-  const selectTheme = (value: ThemePreference) => {
+  const selectTheme = useCallback((value: ThemePreference) => {
     setTheme(value)
     try {
       localStorage.setItem(storageKey, value)
     } catch (error) {
       console.warn('Could not save the theme preference', error)
     }
-  }
+  }, [])
 
   return { theme, setTheme: selectTheme }
 }

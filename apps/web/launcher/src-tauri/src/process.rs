@@ -207,6 +207,34 @@ pub async fn is_port_open(host: &str, port: u16) -> bool {
   tokio::net::TcpStream::connect(&addr).await.is_ok()
 }
 
+/// Terminate any stale vite dev servers that might be blocking port 5173.
+/// This handles the case where a previous `tauri:dev` was interrupted.
+pub fn terminate_vite_dev_servers() {
+  // On Windows, find and kill any node/vite processes on port 5173
+  #[cfg(target_os = "windows")]
+  {
+    use std::process::Command;
+    let result = Command::new("netstat")
+      .args(["-ano", "-p", "tcp"])
+      .output();
+    if let Ok(output) = result {
+      let stdout = String::from_utf8_lossy(&output.stdout);
+      for line in stdout.lines().skip(1) {
+        if line.trim().ends_with("LISTENING") && line.contains(":5173 ") {
+          let parts: Vec<&str> = line.split_whitespace().collect();
+          if parts.len() >= 5 {
+            let pid: u32 = match parts[4].parse() {
+              Ok(p) => p,
+              Err(_) => continue,
+            };
+            let _ = Command::new("taskkill").args(["/F", "/PID", &pid.to_string()]).output();
+          }
+        }
+      }
+    }
+  }
+}
+
 async fn read_stream(
   stream: impl AsyncRead + Unpin,
   logs: &SharedLogBuffer,

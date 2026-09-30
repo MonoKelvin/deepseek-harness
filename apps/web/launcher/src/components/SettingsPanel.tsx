@@ -1,17 +1,17 @@
-import { useEffect, useRef } from 'react'
-import { author, homepage } from '../../package.json'
+import { useEffect, useState } from 'react'
+import { homepage } from '../../package.json'
 import { useI18n } from '../i18n'
 import type { ThemePreference } from '../hooks/useTheme'
 import type { AppSettings } from '../types/server-status'
 import { Button } from './ui/button'
+import { SegmentedControl } from './SegmentedControl'
 import { TablerIcon } from '../lib/TablerIcon'
 
 interface SettingsPanelProps {
   version: string
   theme: ThemePreference
   settings: AppSettings | null
-  dshDirectoryValid: boolean
-  activeSetting: 'dsh-directory' | null
+  dshDirectoryValid?: boolean
   onThemeChange: (theme: ThemePreference) => void
   onDshDirectoryChange: (path: string) => void
   onBrowseDshDirectory: () => void
@@ -19,89 +19,109 @@ interface SettingsPanelProps {
   onOpenProject: () => void
 }
 
+/** Edit persisted settings; directory changes save on blur or Enter. */
 export function SettingsPanel({
-  version, theme, settings, dshDirectoryValid, activeSetting,
+  version, theme, settings, dshDirectoryValid,
   onThemeChange, onDshDirectoryChange, onBrowseDshDirectory, onLocaleChange, onOpenProject,
 }: SettingsPanelProps) {
   const { t, locale } = useI18n()
-  const dshDirValue = settings?.dshDirectory ?? ''
-  const dshDirInvalid = settings?.dshDirectory !== null && !dshDirectoryValid
-  const dshRowRef = useRef<HTMLDivElement>(null)
+  const [directory, setDirectory] = useState(settings?.dshDirectory ?? '')
+  const directoryInvalid = dshDirectoryValid === false
 
-  // When the "specify DSH directory" link is followed from the status area,
-  // scroll the matching row into view and clear the highlight after a delay.
   useEffect(() => {
-    if (activeSetting === 'dsh-directory' && dshRowRef.current) {
-      dshRowRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    }
-  }, [activeSetting])
+    setDirectory(settings?.dshDirectory ?? '')
+  }, [settings?.dshDirectory])
 
   return (
     <section className="settings-panel" aria-label={t('settings.title')}>
       <div className="settings-header">
         <img className="settings-icon" src="./appicon-512.png" alt="" aria-hidden="true" />
         <div className="settings-info">
-          <div className="settings-app-title">{t('app.title')}</div>
+          <div className="settings-app-title">
+            <span>{t('app.title')}</span>
+            {version && <span className="settings-app-version">v{version}</span>}
+          </div>
           <p className="settings-app-description">{t('app.description')}</p>
         </div>
       </div>
 
       <div className="settings-fields">
-        <div className="setting-row" ref={dshRowRef} data-highlight={activeSetting === 'dsh-directory' ? 'dsh-directory' : undefined}>
+        <div className="setting-row">
           <div className="setting-label">
-            <span>{t('settings.dshDirectory')}</span>
-            <p className="setting-caption">{t('settings.dshDirectoryHint')}</p>
+            <label htmlFor="dsh-directory">{t('settings.dshDirectory')}</label>
+            <p className="setting-caption" id="dsh-directory-hint">{t('settings.dshDirectoryHint')}</p>
           </div>
           <div className="setting-control">
-            <input
-              type="text"
-              className="setting-input"
-              placeholder={t('settings.dshDirectoryPlaceholder')}
-              value={dshDirValue}
-              onChange={event => onDshDirectoryChange(event.target.value)}
-              data-invalid={dshDirInvalid}
-              aria-invalid={dshDirInvalid}
-            />
-            <Button variant="ghost" size="sm" className="setting-browse-btn" onClick={onBrowseDshDirectory} aria-label={t('settings.dshDirectoryAuto')}>
-              <TablerIcon name="folder" size={16} />
-            </Button>
+            <div className="setting-path">
+              <input
+                id="dsh-directory"
+                type="text"
+                className="setting-input"
+                placeholder={t('settings.dshDirectoryPlaceholder')}
+                value={directory}
+                disabled={!settings}
+                onChange={event => setDirectory(event.target.value)}
+                onBlur={() => {
+                  if (directory !== (settings?.dshDirectory ?? '')) onDshDirectoryChange(directory)
+                }}
+                onKeyDown={event => {
+                  if (event.key === 'Enter') event.currentTarget.blur()
+                }}
+                data-invalid={directoryInvalid}
+                aria-invalid={directoryInvalid}
+                aria-describedby={directoryInvalid ? 'dsh-directory-error' : 'dsh-directory-hint'}
+              />
+              <Button variant="ghost" size="sm" className="setting-browse-btn" onClick={onBrowseDshDirectory} aria-label={t('settings.dshDirectoryBrowse')} data-tooltip={t('settings.dshDirectoryBrowse')}>
+                <TablerIcon name="folder" size={16} />
+              </Button>
+            </div>
           </div>
-          {dshDirInvalid && <p className="setting-error">{t('settings.dshDirectoryInvalid')}</p>}
+          {directoryInvalid && <p className="setting-error" id="dsh-directory-error">{t('settings.dshDirectoryInvalid')}</p>}
         </div>
 
         <div className="setting-row">
           <div className="setting-label">
             <span>{t('settings.theme')}</span>
-            <p className="setting-caption">{t('settings.theme')}</p>
+            <p className="setting-caption">{t('settings.themeHint')}</p>
           </div>
           <div className="setting-control">
-            <div className="compact-choice" role="group" aria-label={t('settings.theme')}>
-              {(['light', 'dark', 'system'] as const).map(value => (
-                <Button key={value} variant="tab-sm" aria-pressed={theme === value} onClick={() => onThemeChange(value)}>
-                  {t(`settings.theme.${value}`)}
-                </Button>
-              ))}
-            </div>
+            <SegmentedControl
+              ariaLabel={t('settings.theme')}
+              items={[
+                { value: 'light', label: t('settings.theme.light') },
+                { value: 'dark', label: t('settings.theme.dark') },
+                { value: 'system', label: t('settings.theme.system') },
+              ]}
+              value={theme}
+              onChange={onThemeChange}
+            />
           </div>
         </div>
 
         <div className="setting-row">
           <div className="setting-label">
             <span>{t('settings.language')}</span>
-            <p className="setting-caption">界面显示语言 / Interface language</p>
+            <p className="setting-caption">{t('settings.languageHint')}</p>
           </div>
           <div className="setting-control">
-            <div className="compact-choice" role="group" aria-label={t('settings.language')}>
-              <Button variant="tab-sm" aria-pressed={locale === 'zh'} onClick={() => onLocaleChange('zh')}>{t('settings.language.zh')}</Button>
-              <Button variant="tab-sm" aria-pressed={locale === 'en'} onClick={() => onLocaleChange('en')}>{t('settings.language.en')}</Button>
-            </div>
+            <SegmentedControl
+              ariaLabel={t('settings.language')}
+              items={[
+                { value: 'zh', label: t('settings.language.zh') },
+                { value: 'en', label: t('settings.language.en') },
+              ]}
+              value={locale}
+              onChange={onLocaleChange}
+            />
           </div>
         </div>
       </div>
 
       <div className="settings-about">
-        <span>{t('settings.version')} {version ? `v${version}` : '—'}</span>
-        <span>{t('settings.author')} {author}</span>
+        <div className="settings-open-source">
+          <span className="settings-open-source-title">{t('settings.openSource')}</span>
+          <span className="settings-open-source-subtitle">{t('settings.license')}</span>
+        </div>
         <Button variant="ghost" size="sm" onClick={onOpenProject} data-tooltip={homepage}>
           GitHub <TablerIcon name="externalLink" size={14} />
         </Button>

@@ -34,7 +34,7 @@ export async function setLocale(locale: 'zh' | 'en'): Promise<void> {
   await invoke('set_locale', { locale })
 }
 
-/** Clear all log entries from the shared log buffer. */
+/** Clear the backend log buffer without resetting entry IDs. */
 export async function clearLogs(): Promise<void> {
   await invoke('clear_logs')
 }
