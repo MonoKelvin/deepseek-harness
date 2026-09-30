@@ -18,8 +18,11 @@ export function useServerStatus(pollIntervalMs: number = 2000): ServerStatusResu
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const initialLoad = useRef(true)
+  const fetching = useRef(false)
 
   const fetchStatus = useCallback(async () => {
+    if (fetching.current) return
+    fetching.current = true
     const isInitial = initialLoad.current
     try {
       const result = await getStatus()
@@ -28,6 +31,7 @@ export function useServerStatus(pollIntervalMs: number = 2000): ServerStatusResu
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
+      fetching.current = false
       if (isInitial) {
         initialLoad.current = false
         setLoading(false)

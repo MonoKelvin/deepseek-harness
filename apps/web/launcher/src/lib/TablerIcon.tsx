@@ -1,37 +1,38 @@
 import type { IconProps } from '@tabler/icons-react'
+import { cn } from './utils'
 import {
-  IconActivity,
   IconAlertTriangle,
   IconCheck,
+  IconCopy,
   IconExternalLink,
+  IconFolder,
   IconHammer,
+  IconLanguage,
   IconLoader2,
+  IconPalette,
   IconPackage,
-  IconPlayerPlay,
   IconPlayerStop,
   IconRefresh,
-  IconRocket,
-  IconServer,
-  IconWifi,
-  IconWorld,
+  IconTrash,
   IconX,
+  IconBleach,
 } from '@tabler/icons-react'
 
 const icons = {
-  activity: IconActivity,
   alert: IconAlertTriangle,
   check: IconCheck,
+  copy: IconCopy,
   externalLink: IconExternalLink,
+  folder: IconFolder,
   hammer: IconHammer,
+  language: IconLanguage,
   loader: IconLoader2,
-  language: IconWorld,
+  palette: IconPalette,
   package: IconPackage,
-  play: IconPlayerPlay,
-  pause: IconPlayerStop,
+  play: IconBleach,
+  stop: IconPlayerStop,
   refresh: IconRefresh,
-  rocket: IconRocket,
-  server: IconServer,
-  wifi: IconWifi,
+  trash: IconTrash,
   x: IconX,
 } as const
 
@@ -41,8 +42,8 @@ interface TablerIconProps extends IconProps {
   name: TablerIconName
 }
 
-/** Render one of the launcher's shared Tabler icons with a consistent stroke weight. */
-export function TablerIcon({ name, size = 18, stroke = 1.75, ...props }: TablerIconProps) {
+/** Render the launcher's action icons with a consistent stroke weight. */
+export function TablerIcon({ name, size = 16, stroke = 2, className, ...props }: TablerIconProps) {
   const Icon = icons[name]
-  return <Icon size={size} stroke={stroke} aria-hidden="true" {...props} />
+  return <Icon size={size} stroke={stroke} aria-hidden="true" className={cn(name === 'play' && 'rotate-90', className)} {...props} />
 }

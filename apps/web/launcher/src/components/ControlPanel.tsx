@@ -1,68 +1,72 @@
 import { TablerIcon, type TablerIconName } from '../lib/TablerIcon'
 import { useI18n, type TranslationKey } from '../i18n'
-import { Button, type ButtonProps } from '@/components/ui/button'
+import { Button } from '@/components/ui/button'
+import type { ServerState } from '../types/server-status'
 
-export interface ControlPanelProps {
-  onInstall: () => void
-  onBuild: () => void
-  onStart: () => void
-  onStop: () => void
-  onRestart: () => void
-  canInstall: boolean
-  canBuild: boolean
-  canStart: boolean
-  canStop: boolean
-  canRestart: boolean
-  disabled?: boolean
-  activeCommand?: string
+export type LauncherCommand = 'install' | 'build' | 'start' | 'stop' | 'restart' | 'open' | 'project'
+
+interface ControlPanelProps {
+  state?: ServerState
+  canOpen: boolean
+  disabled: boolean
+  dshDirectoryValid: boolean
+  activeCommand: LauncherCommand | null
+  onCommand: (command: LauncherCommand) => void
 }
 
-interface ActionButtonProps {
-  labelKey: TranslationKey
-  onClick: () => void
-  disabled?: boolean
-  active?: boolean
+interface ActionProps {
+  command: LauncherCommand
+  label: TranslationKey
   icon: TablerIconName
-  variant?: ButtonProps['variant']
+  kind?: 'primary' | 'expand' | 'secondary'
+  disabled: boolean
+  activeCommand: LauncherCommand | null
+  tooltip?: string
+  onCommand: (command: LauncherCommand) => void
 }
 
-function ActionButton({ labelKey, onClick, disabled, active, icon, variant = 'secondary' }: ActionButtonProps) {
+function Action({ command, label, icon, kind = 'secondary', disabled, activeCommand, tooltip, onCommand }: ActionProps) {
   const { t } = useI18n()
+  const active = activeCommand === command
+  const text = active ? t('controls.working') : t(label)
   return (
     <Button
-      type="button"
-      onClick={onClick}
-      disabled={disabled || active}
-      variant={variant}
-      className="h-auto flex-col gap-1.5 py-2.5"
-      aria-label={active ? t('controls.working') : t(labelKey)}
+      variant={kind === 'primary' ? 'default' : kind === 'expand' ? 'utility' : 'ghost'}
+      size={kind === 'primary' ? 'default' : kind === 'expand' ? 'tool' : 'sm'}
+      onClick={() => onCommand(command)}
+      disabled={disabled || activeCommand !== null}
+      aria-label={t(label)}
+      data-tooltip={tooltip}
+      aria-busy={active}
     >
-      <TablerIcon name={active ? 'loader' : icon} size={18} className={active ? 'animate-spin' : undefined} />
-      <span className="text-[11px] font-medium">{active ? t('controls.working') : t(labelKey)}</span>
+      <TablerIcon name={active ? 'loader' : icon} size={kind === 'secondary' ? 16 : undefined} className={active ? 'animate-spin' : undefined} />
+      {kind === 'expand' ? <span className="action-label" aria-hidden="true">{text}</span> : text}
     </Button>
   )
 }
 
-/** Group the lifecycle actions into one consistent control surface. */
-export function ControlPanel({
-  onInstall, onBuild, onStart, onStop, onRestart,
-  canInstall, canBuild, canStart, canStop, canRestart,
-  disabled, activeCommand,
-}: ControlPanelProps) {
+/** Lifecycle actions follow service ownership; preparation requires a stopped service. */
+export function ControlPanel({ state, canOpen, disabled, dshDirectoryValid, activeCommand, onCommand }: ControlPanelProps) {
   const { t } = useI18n()
+  const running = state === 'running-managed' || state === 'running-external'
+  const preparingDisabled = disabled || !dshDirectoryValid || state !== 'stopped'
+  const common = { activeCommand, onCommand }
+  const preparationHint = (label: TranslationKey) => activeCommand ? t('controls.wait') : preparingDisabled ? t('controls.stopFirst') : t(label)
+
   return (
-    <section aria-label={t('controls.title')}>
-      <div className="mb-2 flex items-baseline justify-between">
-        <h2 className="text-[13px] font-semibold text-foreground/90">{t('controls.title')}</h2>
-        <p className="text-xs text-muted-foreground">{t('controls.subtitle')}</p>
+    <div className="service-actions">
+      <div className="lifecycle-actions">
+        <Action {...common} command={running ? 'open' : 'start'} label={running ? 'controls.open' : 'controls.start'} icon={running ? 'externalLink' : 'play'} kind="primary" disabled={disabled || !dshDirectoryValid || (running ? !canOpen : state !== 'stopped')} />
+        <Action {...common} command="install" label="controls.install" icon="package" kind="expand" disabled={preparingDisabled} tooltip={preparationHint('controls.installHint')} />
+        <Action {...common} command="build" label="controls.build" icon="hammer" kind="expand" disabled={preparingDisabled} tooltip={preparationHint('controls.buildHint')} />
+        {state === 'running-managed' && (
+          <>
+            <Action {...common} command="restart" label="controls.restart" icon="refresh" disabled={disabled || !dshDirectoryValid} />
+            <Action {...common} command="stop" label="controls.stop" icon="stop" disabled={disabled || !dshDirectoryValid} />
+          </>
+        )}
       </div>
-      <div className="grid grid-cols-5 gap-2">
-        <ActionButton labelKey="controls.install" onClick={onInstall} disabled={disabled || !canInstall} active={activeCommand === 'install'} icon="package" />
-        <ActionButton labelKey="controls.build" onClick={onBuild} disabled={disabled || !canBuild} active={activeCommand === 'build'} icon="hammer" />
-        <ActionButton labelKey="controls.start" onClick={onStart} disabled={disabled || !canStart} active={activeCommand === 'start'} icon="play" variant="default" />
-        <ActionButton labelKey="controls.restart" onClick={onRestart} disabled={disabled || !canRestart} active={activeCommand === 'restart'} icon="refresh" />
-        <ActionButton labelKey="controls.stop" onClick={onStop} disabled={disabled || !canStop} active={activeCommand === 'stop'} icon="pause" variant="destructive" />
-      </div>
-    </section>
+      {state === 'running-external' && <span className="external-note">{t('status.externalNote')}</span>}
+    </div>
   )
 }

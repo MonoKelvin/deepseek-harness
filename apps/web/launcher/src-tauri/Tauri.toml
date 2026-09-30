@@ -15,12 +15,12 @@ with-global-tauri = true
 [[app.windows]]
 url = "index.html"
 label = "main"
-width = 560
-height = 420
-min-width = 560
-min-height = 420
-max-width = 560
-max-height = 420
+width = 600
+height = 480
+min-width = 600
+min-height = 480
+max-width = 600
+max-height = 480
 resizable = false
 fullscreen = false
 maximized = false
@@ -29,6 +29,8 @@ center = true
 skip-taskbar = true
 title = "DSH 启动器"
 decorations = false
+shadow = false
+visible = false
 transparent = true
 drag-drop-enabled = false
 

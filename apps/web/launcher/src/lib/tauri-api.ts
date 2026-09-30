@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
-import type { ServerStatusInfo } from '../types/server-status'
+import type { ServerStatusInfo, AppSettings, LogLevel } from '../types/server-status'
 
-export type { ServerStatusInfo } from '../types/server-status'
+export type { ServerStatusInfo, AppSettings, LogLevel } from '../types/server-status'
 
 /** Result returned by a lifecycle command executed by the Tauri backend. */
 export interface CommandOutput {
@@ -13,6 +13,35 @@ export interface CommandOutput {
 /** Read the current dsh web server status. */
 export function getStatus(): Promise<ServerStatusInfo> {
   return invoke<ServerStatusInfo>('get_status')
+}
+/** Get persisted launcher settings (theme, locale, DSH directory). */
+export function getSettings(): Promise<AppSettings> {
+  return invoke<AppSettings>('get_settings')
+}
+
+/** Set the DSH workspace root directory. */
+export async function setDshDirectory(path: string): Promise<AppSettings> {
+  return invoke<AppSettings>('set_dsh_directory', { path })
+}
+
+/** Persist the theme preference. */
+export async function setTheme(theme: 'light' | 'dark' | 'system'): Promise<void> {
+  await invoke('set_theme', { theme })
+}
+
+/** Persist the locale preference. */
+export async function setLocale(locale: 'zh' | 'en'): Promise<void> {
+  await invoke('set_locale', { locale })
+}
+
+/** Clear all log entries from the shared log buffer. */
+export async function clearLogs(): Promise<void> {
+  await invoke('clear_logs')
+}
+
+/** Open a directory picker dialog; returns the selected path or null. */
+export async function openDirectoryPicker(): Promise<string | null> {
+  return invoke<string | null>('open_directory_picker')
 }
 
 /** Install workspace dependencies through the launcher backend. */
