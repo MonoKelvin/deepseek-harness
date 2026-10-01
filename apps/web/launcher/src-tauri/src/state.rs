@@ -11,9 +11,11 @@ pub struct AppSettings {
     pub theme: String,
     pub locale: String,
     /// Whether the launcher starts at sign-in. The OS autostart entry is the
-    /// only stored copy, so this field is read from the plugin per request and
-    /// never persisted to `settings.json`.
-    #[serde(skip)]
+    /// authoritative source, so this is recomputed from the plugin on every
+    /// `get_settings` call. It is serialized to the frontend (so the toggle
+    /// reflects reality) but stripped before persisting to `settings.json`,
+    /// which must never become the source of truth.
+    #[serde(default)]
     pub autostart: bool,
 }
 
@@ -59,7 +61,18 @@ pub fn save_settings(app_handle: &tauri::AppHandle, settings: &AppSettings) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    if let Ok(content) = serde_json::to_string_pretty(settings) {
+    // The OS autostart entry is the only source of truth for `autostart`; keep
+    // it out of the persisted file so a stale value can never override reality.
+    let value = match serde_json::to_value(settings) {
+        Ok(mut value) => {
+            if let Some(object) = value.as_object_mut() {
+                object.remove("autostart");
+            }
+            value
+        }
+        Err(_) => return,
+    };
+    if let Ok(content) = serde_json::to_string_pretty(&value) {
         let _ = std::fs::write(&path, content);
     }
 }
