@@ -103,6 +103,9 @@
 .primary-button { background: rgb(var(--primary) / 0.88); backdrop-filter: blur(14px) saturate(1.15); }
 .primary-button:enabled:hover { background: rgb(var(--primary) / 0.95); }
 .primary-button:enabled:active { background: rgb(var(--primary)); }
+.start-button { background: rgb(var(--primary) / 0.16); color: rgb(var(--primary)); backdrop-filter: blur(14px); }
+.start-button:enabled:hover { background: rgb(var(--primary) / 0.22); }
+.start-button:enabled:active { background: rgb(var(--primary) / 0.28); }
 .action-expand { background: rgb(var(--background) / 0.7); backdrop-filter: blur(12px); }
 .action-expand:enabled:hover, .action-expand:focus-visible { background: rgb(var(--background) / 0.95); }
 .action-expand:enabled:active { background: rgb(var(--muted)); }

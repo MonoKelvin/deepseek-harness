@@ -148,7 +148,7 @@ test('compact actions, rotated rounded icon, blur, and version', async (t) => {
   assert.match(await page.locator('.service-state').evaluate((node) => getComputedStyle(node).backdropFilter), /blur/)
   assert.equal(await page.locator('.app-version').innerText(), `v${metadata.version}`)
   assert.equal(await page.locator('.titlebar button').count(), 1)
-  assert.equal(await page.locator('button.primary-button').count(), 1)
+  assert.equal(await page.locator('button.start-button').count(), 1)
   assert.equal(await page.locator('[title]').count(), 0)
   await assertLayout(page)
   await screenshot(page, 'stopped-zh.png')

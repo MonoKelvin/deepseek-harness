@@ -33,10 +33,10 @@ interface ActionProps {
 function Action({ command, label, icon, kind, disabled, activeCommand, tooltip, onCommand }: ActionProps) {
   const { t } = useI18n()
   const active = activeCommand === command
-  const text = active ? t('controls.working') : t(label)
+  const text = active ? (command === 'start' ? t('controls.starting') : t('controls.working')) : t(label)
   return (
     <Button
-      variant={kind === 'primary' ? 'default' : 'utility'}
+      variant={command === 'start' ? 'start' : (kind === 'primary' ? 'default' : 'utility')}
       size={kind === 'primary' ? 'default' : 'tool'}
       onClick={() => onCommand(command)}
       disabled={disabled || activeCommand !== null}

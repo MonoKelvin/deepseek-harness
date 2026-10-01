@@ -23,6 +23,7 @@ export const en: Record<keyof typeof zh, string> = {
   'controls.installHint': 'Install project dependencies',
   'controls.buildHint': 'Build page resources',
   'controls.start': 'Start service',
+  'controls.starting': 'Starting...',
   'controls.open': 'Open DSH',
   'controls.stop': 'Stop',
   'controls.restart': 'Restart',

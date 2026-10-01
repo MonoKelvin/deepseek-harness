@@ -9,6 +9,7 @@ const buttonVariants = cva(
     variants: {
       variant: {
         default: 'primary-button rounded-full text-sm text-primary-foreground enabled:hover:-translate-y-px enabled:hover:shadow-md enabled:hover:shadow-primary/15 enabled:active:translate-y-0 enabled:active:shadow-none',
+        start: 'start-button rounded-full text-sm enabled:hover:-translate-y-px enabled:hover:shadow-md enabled:hover:shadow-primary/15 enabled:active:translate-y-0 enabled:active:shadow-none',
         utility: 'action-expand rounded-full text-foreground',
         ghost: 'text-muted-foreground enabled:hover:bg-foreground/5 enabled:hover:text-foreground enabled:active:bg-foreground/10',
         tab: 'text-xs text-muted-foreground hover:text-foreground active:bg-foreground/5 aria-pressed:bg-background aria-pressed:text-foreground aria-pressed:shadow-sm',

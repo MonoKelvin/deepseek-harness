@@ -22,6 +22,7 @@ export const zh = {
   'controls.installHint': '安装项目依赖',
   'controls.buildHint': '构建页面资源',
   'controls.start': '启动服务',
+  'controls.starting': '正在启动...',
   'controls.open': '打开DSH',
   'controls.stop': '停止',
   'controls.restart': '重启',
