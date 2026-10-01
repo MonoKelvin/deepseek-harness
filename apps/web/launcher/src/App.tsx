@@ -11,11 +11,12 @@ import { TooltipHost } from './components/TooltipHost'
 import { TablerIcon } from './lib/TablerIcon'
 import { Button } from '@/components/ui/button'
 import { useServerStatus } from './hooks/useServerStatus'
+import { useLogStream } from './hooks/useLogStream'
 import { useTheme, hasStoredTheme } from './hooks/useTheme'
 import { useI18n, type TranslationKey } from './i18n'
 import {
   installDeps, buildFrontend, startServer, stopServer, restartServer, openUrl,
-  getSettings, setDshDirectory, clearLogs, setTheme, setLocale, openDirectoryPicker,
+  getSettings, setDshDirectory, clearLogs, setTheme, setLocale, setAutostart, openDirectoryPicker,
   type CommandOutput, type AppSettings,
 } from './lib/tauri-api'
 import type { LogEntry } from './types/server-status'
@@ -36,10 +37,14 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+/** How long the log copy button shows its success mark before reverting. */
+const COPY_FEEDBACK_MS = 2000
+
 function App() {
   const { t, locale, setLocale: setLocalePreference } = useI18n()
   const { theme, setTheme: setThemePreference } = useTheme()
   const { status, loading, refresh, error: statusError } = useServerStatus(2000)
+  const logStream = useLogStream(status?.logEntries)
   const commandPending = useRef(false)
   const [activeCommand, setActiveCommand] = useState<LauncherCommand | null>(null)
   const [commandSuccess, setCommandSuccess] = useState<boolean | null>(null)
@@ -47,12 +52,18 @@ function App() {
   const [version, setVersion] = useState('')
   const [settings, setSettings] = useState<AppSettings | null>(null)
   const [uiErrors, setUiErrors] = useState<UiError[]>([])
+  const [copied, setCopied] = useState(false)
   const nextErrorId = useRef(-1)
+  const copyTimer = useRef<number | null>(null)
 
   const reportError = useCallback((action: TranslationKey, error: unknown) => {
     // Negative IDs keep IPC-independent errors distinct from backend entries.
     const entry = { id: nextErrorId.current--, timestamp: new Date().toISOString(), action, detail: errorMessage(error) }
     setUiErrors(previous => [...previous.slice(-199), entry])
+  }, [])
+
+  useEffect(() => () => {
+    if (copyTimer.current !== null) window.clearTimeout(copyTimer.current)
   }, [])
 
   useEffect(() => {
@@ -78,7 +89,7 @@ function App() {
   }, [reportError, setThemePreference])
 
   const logEntries: LogEntry[] = [
-    ...(status?.logEntries ?? []),
+    ...logStream.entries,
     ...uiErrors.map<LogEntry>(entry => ({
       id: entry.id,
       source: 'launcher',
@@ -154,20 +165,31 @@ function App() {
     setLocalePreference(next)
     void setLocale(next).catch(error => reportError('settings.language', error))
   }
+  const handleAutostartChange = (enabled: boolean) => {
+    void setAutostart(enabled).then(setSettings).catch(error => reportError('settings.autostart', error))
+  }
   const handleClearLogs = () => {
     void clearLogs().then(() => {
+      logStream.clear()
       setUiErrors([])
       setCommandSuccess(null)
       refresh()
     }).catch(error => reportError('log.clear', error))
   }
   const handleCopyLogs = async () => {
+    if (copied) return
     const text = logEntries.map(entry => `${entry.timestamp} [${t(`log.level.${entry.severity}`)}] ${entry.message}`).join('\n')
     try {
       await navigator.clipboard.writeText(text)
     } catch (error) {
       reportError('log.copy', error)
+      return
     }
+    setCopied(true)
+    copyTimer.current = window.setTimeout(() => {
+      copyTimer.current = null
+      setCopied(false)
+    }, COPY_FEEDBACK_MS)
   }
 
   const moveBackdrop = (event: PointerEvent<HTMLDivElement>) => {
@@ -230,8 +252,9 @@ function App() {
                 <Button variant="ghost" size="sm" onClick={handleClearLogs} aria-label={t('log.clear')} data-tooltip={t('log.clear')}>
                   <TablerIcon name="trash" size={14} />
                 </Button>
-                <Button variant="ghost" size="sm" onClick={handleCopyLogs} aria-label={t('log.copy')} data-tooltip={t('log.copy')}>
-                  <TablerIcon name="copy" size={14} />
+                <Button variant="ghost" size="sm" className="copy-button" data-copied={copied} disabled={copied} onClick={handleCopyLogs} aria-label={t('log.copy')} data-tooltip={t('log.copy')}>
+                  <TablerIcon name="copy" size={14} className="copy-glyph" />
+                  <TablerIcon name="check" size={14} className="copy-glyph-check" />
                 </Button>
               </div>
             )}
@@ -250,6 +273,7 @@ function App() {
               onDshDirectoryChange={handleDshDirectoryChange}
               onBrowseDshDirectory={handleBrowseDshDirectory}
               onLocaleChange={handleLocaleChange}
+              onAutostartChange={handleAutostartChange}
               onOpenProject={() => onCommand('project')}
             />}
         </section>

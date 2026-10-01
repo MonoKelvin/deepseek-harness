@@ -25,4 +25,6 @@ export interface AppSettings {
   dshDirectory: string | null
   theme: string
   locale: string
+  /** Mirrors the OS autostart entry; not stored in the settings file. */
+  autostart: boolean
 }

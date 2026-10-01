@@ -12,6 +12,10 @@ export interface ServerStatusResult {
  * Poll the server status. Only the initial fetch toggles `loading`; background
  * polls update silently and keep the last status on error, so the UI does not
  * flicker back to a skeleton every interval.
+ *
+ * A refresh requested while a poll is in flight re-fetches as soon as that poll
+ * settles instead of being dropped, so an action's effect shows up without
+ * waiting for the next interval.
  */
 export function useServerStatus(pollIntervalMs: number = 2000): ServerStatusResult {
   const [status, setStatus] = useState<ServerStatusInfo | null>(null)
@@ -19,24 +23,31 @@ export function useServerStatus(pollIntervalMs: number = 2000): ServerStatusResu
   const [error, setError] = useState<string | null>(null)
   const initialLoad = useRef(true)
   const fetching = useRef(false)
+  const pending = useRef(false)
 
   const fetchStatus = useCallback(async () => {
-    if (fetching.current) return
-    fetching.current = true
-    const isInitial = initialLoad.current
-    try {
-      const result = await getStatus()
-      setStatus(result)
-      setError(null)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    } finally {
-      fetching.current = false
-      if (isInitial) {
-        initialLoad.current = false
-        setLoading(false)
-      }
+    if (fetching.current) {
+      pending.current = true
+      return
     }
+    fetching.current = true
+    do {
+      const isInitial = initialLoad.current
+      try {
+        const result = await getStatus()
+        setStatus(result)
+        setError(null)
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e))
+      } finally {
+        if (isInitial) {
+          initialLoad.current = false
+          setLoading(false)
+        }
+      }
+      pending.current = false
+    } while (pending.current)
+    fetching.current = false
   }, [])
 
   const refresh = useCallback(() => {

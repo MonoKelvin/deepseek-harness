@@ -7,9 +7,11 @@ use std::process::Stdio;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
+use tauri::Emitter;
 use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
+use tokio::time::{Duration, Instant};
 
 use crate::state::{AppSettings, resolve_dsh_root};
 
@@ -50,6 +52,17 @@ pub struct CommandOutput {
 const DEFAULT_PORT: u16 = 3080;
 const DEFAULT_HOST: &str = "127.0.0.1";
 const MAX_LOG_ENTRIES: usize = 200;
+/// Grace period for a terminated process tree to release the port before the
+/// socket owner is terminated instead.
+const PORT_RELEASE_GRACE: Duration = Duration::from_millis(500);
+/// How long a stop waits for the port owner to release the port.
+const PORT_RELEASE_TIMEOUT: Duration = Duration::from_secs(5);
+/// Attempts to terminate the port owner, re-resolving it after each attempt.
+const PORT_OWNER_ROUNDS: usize = 3;
+
+/// Event the launcher emits for each appended log entry, so the UI renders a
+/// line as it is produced instead of on the next status poll.
+pub const LOG_ENTRY_EVENT: &str = "log-entry";
 
 /// Executable suffixes to try when the host does not define `PATHEXT`.
 #[cfg(target_os = "windows")]
@@ -98,9 +111,13 @@ pub struct LogEntry {
 }
 
 /// Keeps the latest entries without reusing IDs after eviction or server restarts.
+///
+/// `app` is set once during setup; entries appended before then stay in the
+/// buffer and reach the UI through the first status snapshot.
 pub struct LogBuffer {
   entries: VecDeque<LogEntry>,
   next_id: u64,
+  app: Option<tauri::AppHandle>,
 }
 
 pub type SharedLogBuffer = Arc<Mutex<LogBuffer>>;
@@ -109,6 +126,7 @@ pub fn new_log_buffer() -> SharedLogBuffer {
   Arc::new(Mutex::new(LogBuffer {
     entries: VecDeque::with_capacity(MAX_LOG_ENTRIES),
     next_id: 1,
+    app: None,
   }))
 }
 
@@ -123,15 +141,27 @@ fn now_timestamp() -> String {
   dt.format("%Y-%m-%d %H:%M:%S").to_string() + &format!(".{:03}", millis)
 }
 
+/// Attach the app handle that log entries are emitted to. Called once during setup.
+pub async fn attach_log_emitter(logs: &SharedLogBuffer, app: tauri::AppHandle) {
+  logs.lock().await.app = Some(app);
+}
+
+/// Append an entry to the buffer and push it to the UI immediately.
 pub async fn append_log(logs: &SharedLogBuffer, source: LogSource, severity: LogSeverity, message: impl Into<String>) {
-  let timestamp = now_timestamp();
-  let mut buffer = logs.lock().await;
-  let id = buffer.next_id;
-  buffer.next_id = id.checked_add(1).expect("log entry ID exhausted");
-  if buffer.entries.len() == MAX_LOG_ENTRIES {
-    buffer.entries.pop_front();
+  let (entry, app) = {
+    let mut buffer = logs.lock().await;
+    let id = buffer.next_id;
+    buffer.next_id = id.checked_add(1).expect("log entry ID exhausted");
+    if buffer.entries.len() == MAX_LOG_ENTRIES {
+      buffer.entries.pop_front();
+    }
+    let entry = LogEntry { id, source, severity, timestamp: now_timestamp(), message: message.into() };
+    buffer.entries.push_back(entry.clone());
+    (entry, buffer.app.clone())
+  };
+  if let Some(app) = app {
+    let _ = app.emit(LOG_ENTRY_EVENT, &entry);
   }
-  buffer.entries.push_back(LogEntry { id, source, severity, timestamp, message: message.into() });
 }
 
 pub async fn log_entries(logs: &SharedLogBuffer) -> Vec<LogEntry> {
@@ -176,11 +206,6 @@ impl ServerManager {
 /// Shared app state injected via Tauri's managed state system.
 pub type SharedManager = Arc<Mutex<ServerManager>>;
 
-/// Resolve the repository root from the launcher's install location or working directory.
-pub fn repo_root() -> String {
-  repo_root_from_settings(&AppSettings::default())
-}
-
 /// Resolve the DSH root from the user-configured directory or auto-detection.
 pub fn repo_root_from_settings(settings: &AppSettings) -> String {
   if let Some(path) = resolve_dsh_root(settings) {
@@ -211,34 +236,6 @@ pub fn repo_root_from_settings(settings: &AppSettings) -> String {
 pub async fn is_port_open(host: &str, port: u16) -> bool {
   let addr = format!("{}:{}", host, port);
   tokio::net::TcpStream::connect(&addr).await.is_ok()
-}
-
-/// Terminate any stale vite dev servers that might be blocking port 5173.
-/// This handles the case where a previous `tauri:dev` was interrupted.
-pub fn terminate_vite_dev_servers() {
-  // On Windows, find and kill any node/vite processes on port 5173
-  #[cfg(target_os = "windows")]
-  {
-    use std::process::Command;
-    let result = Command::new("netstat")
-      .args(["-ano", "-p", "tcp"])
-      .output();
-    if let Ok(output) = result {
-      let stdout = String::from_utf8_lossy(&output.stdout);
-      for line in stdout.lines().skip(1) {
-        if line.trim().ends_with("LISTENING") && line.contains(":5173 ") {
-          let parts: Vec<&str> = line.split_whitespace().collect();
-          if parts.len() >= 5 {
-            let pid: u32 = match parts[4].parse() {
-              Ok(p) => p,
-              Err(_) => continue,
-            };
-            let _ = Command::new("taskkill").args(["/F", "/PID", &pid.to_string()]).output();
-          }
-        }
-      }
-    }
-  }
 }
 
 async fn read_stream(
@@ -446,10 +443,13 @@ pub async fn start_dsh_web(manager: &mut ServerManager, settings: &crate::state:
 ///
 /// Windows reaches pnpm through its `pnpm.cmd` shim, so the launcher's direct
 /// child is a `cmd.exe` whose descendants include the node server holding the
-/// port. Terminating only the direct child leaves that server running, which the
-/// launcher then reports as an external service it cannot stop. `taskkill`
-/// reports a nonzero status when the tree has already exited, which is not a
-/// stop failure, so only an inability to run it is an error.
+/// port. Terminating only the direct child leaves that server running and
+/// holding the port.
+///
+/// The exit status is not trusted, because `/T` reports 128 both for a tree that
+/// has already exited and for one taskkill was refused. The stop verifies the
+/// port instead, and a port owner the launcher may not terminate is reported by
+/// `terminate_listener`.
 #[cfg(target_os = "windows")]
 async fn terminate_process_tree(pid: u32) -> io::Result<()> {
   tokio::process::Command::new("taskkill")
@@ -461,9 +461,32 @@ async fn terminate_process_tree(pid: u32) -> io::Result<()> {
     .map(|_| ())
 }
 
-/// Stop the managed child, then dispose its output task before returning.
-pub async fn stop_dsh_web(manager: &mut ServerManager) -> Result<(), String> {
-  let locale = crate::state::current_locale(&crate::state::AppSettings::default());
+/// Terminate the single process `netstat` attributes a port to.
+///
+/// The process is terminated through `OpenProcess`/`TerminateProcess` rather than
+/// `taskkill`. A refusal then carries the Win32 code that explains it, whereas a
+/// `taskkill` exit status reports 128 both for a target that is already gone and
+/// for one it was refused. `/T` is unnecessary here: a listening socket handed to a
+/// surviving child is caught by the next round of `stop_port_owner`.
+#[cfg(target_os = "windows")]
+async fn terminate_listener(pid: u32) -> io::Result<()> {
+  use windows::Win32::Foundation::CloseHandle;
+  use windows::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
+  let handle = unsafe { OpenProcess(PROCESS_TERMINATE, false.into(), pid) }
+    .map_err(|error| io::Error::other(format!("cannot open process {pid}: {error}")))?;
+  let terminated = unsafe { TerminateProcess(handle, 1) };
+  let _ = unsafe { CloseHandle(handle) };
+  terminated.map_err(|error| io::Error::other(format!("cannot terminate process {pid}: {error}")))
+}
+
+/// Stop the server and dispose the managed child before returning.
+///
+/// A server the launcher started is stopped through its own process tree. When
+/// the port is still held afterwards — a server another program started, or one
+/// the tree kill could not reach — the socket owner is terminated instead, since
+/// it is the only remaining handle on the process holding the port.
+pub async fn stop_dsh_web(manager: &mut ServerManager, settings: &crate::state::AppSettings) -> Result<(), String> {
+  let locale = crate::state::current_locale(settings);
   // Take the descendants down first: terminating the direct child orphans them.
   #[cfg(target_os = "windows")]
   {
@@ -488,8 +511,140 @@ pub async fn stop_dsh_web(manager: &mut ServerManager) -> Result<(), String> {
   }
   manager.child = None;
   manager.pid = None;
+  if !await_port_released(PORT_RELEASE_GRACE).await {
+    let stopped = match stop_port_owner(&manager.logs, &locale).await {
+      Ok(stopped) => stopped,
+      Err(error) => {
+        let error = format!("Failed to stop dsh web: {error}");
+        log_command_result(&manager.logs, &locale, "stop", Err(&error)).await;
+        return Err(error);
+      }
+    };
+    // Report the stop only once the socket is free, so the next status poll
+    // cannot still see the stopped server as running. A port that accepts
+    // connections with no listed owner is a different failure from one whose
+    // owner kept the socket, and only the second has an actionable cause.
+    if !await_port_released(PORT_RELEASE_TIMEOUT).await {
+      let key = if stopped.is_empty() { "process.owner.missing" } else { "process.port.held" };
+      let error = crate::state::t_log(&locale, key, &[("port", &DEFAULT_PORT.to_string())]);
+      // What still holds the port separates a port taken over from a terminate
+      // that did not take effect, which the failure alone cannot.
+      let remaining = listening_owners(DEFAULT_PORT).await.unwrap_or_default();
+      if !remaining.is_empty() {
+        let pids = remaining.iter().map(u32::to_string).collect::<Vec<_>>().join(", ");
+        append_log(&manager.logs, LogSource::Launcher, LogSeverity::Warn, crate::state::t_log(&locale, "process.port.listeners", &[("port", &DEFAULT_PORT.to_string()), ("pids", &pids)])).await;
+      }
+      log_command_result(&manager.logs, &locale, "stop", Err(&error)).await;
+      return Err(error);
+    }
+  }
   log_command_result(&manager.logs, &locale, "stop", Ok(())).await;
   Ok(())
+}
+
+/// Wait out `timeout` for the stopped server to release the port, so a following
+/// start does not race the socket it still holds. Returns whether it was released.
+async fn await_port_released(timeout: Duration) -> bool {
+  let deadline = Instant::now() + timeout;
+  loop {
+    if !is_port_open(DEFAULT_HOST, DEFAULT_PORT).await {
+      return true;
+    }
+    if Instant::now() >= deadline {
+      return false;
+    }
+    tokio::time::sleep(Duration::from_millis(50)).await;
+  }
+}
+
+/// Read the PIDs `netstat` attributes the listening sockets of `port` to.
+#[cfg(target_os = "windows")]
+async fn listening_owners(port: u16) -> io::Result<Vec<u32>> {
+  let output = tokio::process::Command::new("netstat").args(["-ano", "-p", "tcp"]).output().await?;
+  let text = String::from_utf8_lossy(&output.stdout);
+  let suffix = format!(":{port}");
+  let mut owners = Vec::new();
+  for line in text.lines() {
+    // Columns: Proto, Local Address, Foreign Address, State, PID. A listening row's
+    // foreign address is `0.0.0.0:0`, so only the local column can end in the port.
+    let columns: Vec<&str> = line.split_whitespace().collect();
+    if columns.len() < 5 || columns[3] != "LISTENING" || !columns[1].ends_with(&suffix) {
+      continue;
+    }
+    if let Ok(pid) = columns[4].parse::<u32>() {
+      owners.push(pid);
+    }
+  }
+  Ok(owners)
+}
+
+/// A listening socket has no name to search for, so Windows maps it to its owner
+/// through `netstat -ano`, and each owner is terminated by `terminate_listener`.
+///
+/// Every attempt is recorded with its PID, because a port that stays busy after a
+/// successful termination is otherwise visible only as its final failure. Returns
+/// the owners that were asked to stop.
+#[cfg(target_os = "windows")]
+async fn terminate_port_listener(logs: &SharedLogBuffer, locale: &str, port: u16) -> io::Result<Vec<u32>> {
+  let owners = listening_owners(port).await?;
+  for pid in &owners {
+    terminate_listener(*pid).await?;
+    append_log(logs, LogSource::Launcher, LogSeverity::Info, crate::state::t_log(locale, "process.kill.result", &[("port", &port.to_string()), ("pid", &pid.to_string())])).await;
+  }
+  Ok(owners)
+}
+
+/// Read the PIDs `lsof` attributes the listening sockets of `port` to.
+#[cfg(not(target_os = "windows"))]
+async fn listening_owners(port: u16) -> io::Result<Vec<u32>> {
+  let output = tokio::process::Command::new("lsof")
+    .args(["-ti", &format!("tcp:{port}"), "-sTCP:LISTEN"])
+    .output()
+    .await?;
+  Ok(String::from_utf8_lossy(&output.stdout)
+    .lines()
+    .filter_map(|line| line.trim().parse::<u32>().ok())
+    .collect())
+}
+
+/// Terminate the process listening on `port` through `lsof`.
+///
+/// Each attempt is recorded, matching the Windows path. Platforms without `lsof`
+/// surface the spawn error, which the caller reports as a stop failure.
+#[cfg(not(target_os = "windows"))]
+async fn terminate_port_listener(logs: &SharedLogBuffer, locale: &str, port: u16) -> io::Result<Vec<u32>> {
+  let owners = listening_owners(port).await?;
+  for pid in &owners {
+    tokio::process::Command::new("kill").args(["-TERM", &pid.to_string()]).status().await?;
+    append_log(logs, LogSource::Launcher, LogSeverity::Info, crate::state::t_log(locale, "process.kill.result", &[("port", &port.to_string()), ("pid", &pid.to_string())])).await;
+  }
+  Ok(owners)
+}
+
+/// Terminate whatever holds `DEFAULT_PORT`, re-resolving the owner after each round.
+///
+/// One round is not always enough. The process `netstat` attributes a port to can
+/// change between rounds — a shell shim hands the listening socket to a surviving
+/// child, a supervisor restarts the server — and each round can only terminate what
+/// owns the port at that moment. Returns the PIDs that were asked to stop, in order.
+async fn stop_port_owner(logs: &SharedLogBuffer, locale: &str) -> io::Result<Vec<u32>> {
+  let mut stopped = Vec::new();
+  for _ in 0..PORT_OWNER_ROUNDS {
+    if !is_port_open(DEFAULT_HOST, DEFAULT_PORT).await {
+      break;
+    }
+    let round = terminate_port_listener(logs, locale, DEFAULT_PORT).await?;
+    if round.is_empty() {
+      // The port accepts connections but nothing is attributed to it, so another
+      // round cannot terminate anything either.
+      break;
+    }
+    stopped.extend(round);
+    if await_port_released(PORT_RELEASE_GRACE).await {
+      break;
+    }
+  }
+  Ok(stopped)
 }
 
 /// Release the process lock before collecting logs and probing the port.
@@ -650,5 +805,41 @@ mod tests {
     let pid = child.id().expect("newly spawned child has a PID");
     child.wait().await.unwrap();
     assert!(terminate_process_tree(pid).await.is_ok());
+  }
+
+  /// A server another program started has no recorded PID, so the stop path can
+  /// only reach it through the port owner that `netstat` reports.
+  #[cfg(target_os = "windows")]
+  #[tokio::test]
+  async fn stopping_an_unmanaged_server_terminates_the_port_owner() {
+    let probe = std::net::TcpListener::bind((DEFAULT_HOST, 0)).unwrap();
+    let port = probe.local_addr().unwrap().port();
+    drop(probe);
+    let serve = format!("require('net').createServer().listen({port}, '{DEFAULT_HOST}')");
+    let mut child = tokio::process::Command::new("node")
+      .args(["-e", &serve])
+      .stdout(Stdio::null())
+      .stderr(Stdio::null())
+      .spawn()
+      .unwrap();
+    assert!(settles_to_port(port, true).await, "the stand-in server holds the port");
+
+    let logs = new_log_buffer();
+    assert!(!terminate_port_listener(&logs, "zh", port).await.unwrap().is_empty(), "the port owner was found");
+    assert!(settles_to_port(port, false).await, "the port owner stopped");
+
+    let _ = child.wait().await;
+  }
+
+  /// Poll until `port` reaches the expected state.
+  #[cfg(target_os = "windows")]
+  async fn settles_to_port(port: u16, open: bool) -> bool {
+    for _ in 0..200 {
+      if is_port_open(DEFAULT_HOST, port).await == open {
+        return true;
+      }
+      tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    false
   }
 }

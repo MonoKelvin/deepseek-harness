@@ -12,11 +12,6 @@ before-build-command = "npm run build"
 [app]
 with-global-tauri = true
 
-[app.tray-icon]
-icon-path = "../public/tray-icon.png"
-tooltip = "DSH 启动器"
-show-menu-on-left-click = false
-
 [[app.windows]]
 url = "index.html"
 label = "main"

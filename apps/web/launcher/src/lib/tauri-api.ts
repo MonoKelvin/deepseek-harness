@@ -34,6 +34,11 @@ export async function setLocale(locale: 'zh' | 'en'): Promise<void> {
   await invoke('set_locale', { locale })
 }
 
+/** Write or remove the OS autostart entry; returns the applied settings. */
+export async function setAutostart(enabled: boolean): Promise<AppSettings> {
+  return invoke<AppSettings>('set_autostart', { enabled })
+}
+
 /** Clear the backend log buffer without resetting entry IDs. */
 export async function clearLogs(): Promise<void> {
   await invoke('clear_logs')

@@ -5,6 +5,7 @@ import type { ThemePreference } from '../hooks/useTheme'
 import type { AppSettings } from '../types/server-status'
 import { Button } from './ui/button'
 import { SegmentedControl } from './SegmentedControl'
+import { Switch } from './ui/switch'
 import { TablerIcon } from '../lib/TablerIcon'
 
 interface SettingsPanelProps {
@@ -16,13 +17,14 @@ interface SettingsPanelProps {
   onDshDirectoryChange: (path: string) => void
   onBrowseDshDirectory: () => void
   onLocaleChange: (locale: 'zh' | 'en') => void
+  onAutostartChange: (enabled: boolean) => void
   onOpenProject: () => void
 }
 
 /** Edit persisted settings; directory changes save on blur or Enter. */
 export function SettingsPanel({
   version, theme, settings, dshDirectoryValid,
-  onThemeChange, onDshDirectoryChange, onBrowseDshDirectory, onLocaleChange, onOpenProject,
+  onThemeChange, onDshDirectoryChange, onBrowseDshDirectory, onLocaleChange, onAutostartChange, onOpenProject,
 }: SettingsPanelProps) {
   const { t, locale } = useI18n()
   const [directory, setDirectory] = useState(settings?.dshDirectory ?? '')
@@ -112,6 +114,21 @@ export function SettingsPanel({
               ]}
               value={locale}
               onChange={onLocaleChange}
+            />
+          </div>
+        </div>
+
+        <div className="setting-row">
+          <div className="setting-label">
+            <span>{t('settings.autostart')}</span>
+            <p className="setting-caption">{t('settings.autostartHint')}</p>
+          </div>
+          <div className="setting-control">
+            <Switch
+              ariaLabel={t('settings.autostart')}
+              checked={settings?.autostart ?? false}
+              disabled={!settings}
+              onChange={onAutostartChange}
             />
           </div>
         </div>

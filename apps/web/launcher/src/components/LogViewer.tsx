@@ -43,7 +43,7 @@ export function LogViewer({ entries, activeLabel }: LogViewerProps) {
                 className="log-line"
               >
                 <span className="log-timestamp" data-tooltip={`${entry.timestamp} UTC`}>{entry.timestamp.slice(11, 23)}</span>
-                <span className={`log-level log-level-${entry.severity}`}>{levelLabel(entry.severity)}</span>
+                <span className={`log-level log-level-${entry.severity}`}>[{levelLabel(entry.severity)}]</span>
                 <span className="log-message">{entry.message}</span>
               </span>
             ))}

@@ -30,7 +30,7 @@ async function pageFor(t, fixture = {}, viewport = { width: 560, height: 420 }) 
       calls: [],
       status: { state: 'stopped', port: 3080, url: null, pid: null, external: false, logEntries: [], error: null, ...fixture.status },
       statusError: fixture.statusError, hold: fixture.hold, reject: fixture.reject,
-      settings: { dshDirectory: 'C:\\code\\deepseek-harness', theme: 'system', locale: 'zh', ...fixture.settings },
+      settings: { dshDirectory: 'C:\\code\\deepseek-harness', theme: 'system', locale: 'zh', autostart: false, ...fixture.settings },
       failures: fixture.failures ?? {},
       pickedDirectory: fixture.pickedDirectory ?? null,
       directoryValid: fixture.directoryValid ?? true,
@@ -39,10 +39,17 @@ async function pageFor(t, fixture = {}, viewport = { width: 560, height: 420 }) 
       output: fixture.output ?? { success: true, stdout: '', stderr: '' },
     }
     let nextLogId = Math.max(0, ...window.fixture.status.logEntries.map(entry => entry.id)) + 1
+    const callbacks = new Map()
+    let nextCallbackId = 1
+    const dispatch = (event, payload) => {
+      for (const [id, callback] of callbacks) callback({ event, id, payload })
+    }
     const append = (source, message, severity = 'info') => {
       const entries = window.fixture.status.logEntries
-      entries.push({ id: nextLogId++, source, severity, timestamp: new Date().toISOString(), message })
+      const entry = { id: nextLogId++, source, severity, timestamp: new Date().toISOString(), message }
+      entries.push(entry)
       if (entries.length > 200) entries.shift()
+      dispatch('log-entry', entry)
     }
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: {
       writeText: async text => {
@@ -50,11 +57,19 @@ async function pageFor(t, fixture = {}, viewport = { width: 560, height: 420 }) 
         window.fixture.copiedText = text
       },
     } })
+    window.__TAURI_EVENT_PLUGIN_INTERNALS__ = {
+      unregisterListener: (_event, id) => { callbacks.delete(id) },
+    }
     window.__TAURI_INTERNALS__ = {
       metadata: { currentWindow: { label: 'main' } },
+      transformCallback: (callback) => { const id = nextCallbackId++; callbacks.set(id, callback); return id },
+      unregisterCallback: (id) => { callbacks.delete(id) },
+      runCallback: (id, data) => { callbacks.get(id)?.(data) },
       invoke: async (command, args) => {
         const data = window.fixture
         data.calls.push({ command, args })
+        if (command === 'plugin:event|listen') return args.handler
+        if (command === 'plugin:event|unlisten') return null
         if (data.failures[command]) throw new Error(data.failures[command])
         if (command === 'plugin:app|version') return version
         if (command === 'get_settings') return structuredClone(data.settings)
@@ -75,6 +90,10 @@ async function pageFor(t, fixture = {}, viewport = { width: 560, height: 420 }) 
         if (command === 'set_locale') {
           data.settings.locale = args.locale
           return
+        }
+        if (command === 'set_autostart') {
+          data.settings.autostart = args.enabled
+          return structuredClone(data.settings)
         }
         if (command === 'get_status') {
           if (data.statusError) throw new Error(data.statusError)
@@ -156,11 +175,44 @@ for (const state of ['starting', 'stopping']) {
   })
 }
 
-test('external service opens its URL without stop or restart controls', async (t) => {
+test('an externally started service opens its URL and can be restarted or stopped', async (t) => {
   const page = await pageFor(t, { status: { state: 'running-external', external: true, url: 'http://127.0.0.1:3080/' } })
-  for (const name of ['停止', '重启']) assert.equal(await page.getByRole('button', { name, exact: true }).count(), 0)
-  await page.getByRole('button', { name: '打开服务', exact: true }).click()
+  assert.equal(await page.locator('.service-state-label').innerText(), '已在运行（外部启动）')
+  await page.getByRole('button', { name: '打开DSH', exact: true }).click()
   assert.deepEqual((await callsFor(page, 'open_url'))[0].args, { url: 'http://127.0.0.1:3080/' })
+  for (const [name, command] of [['重启', 'restart_server'], ['停止', 'stop_server']]) {
+    const control = page.getByRole('button', { name, exact: true })
+    assert.equal(await control.innerText(), '', 'lifecycle controls are icon-only')
+    const box = await control.boundingBox()
+    assert.ok(Math.abs(box.width - box.height) < 1, `round control: ${box.width}x${box.height}`)
+    assert.match(await control.evaluate((node) => getComputedStyle(node).backdropFilter), /blur/)
+    await control.click()
+    await page.locator('.log-result').getByText('已完成', { exact: true }).waitFor()
+    await page.locator('.log-body').getByText(`${command} succeeded`, { exact: true }).waitFor()
+    assert.equal((await callsFor(page, command)).length, 1)
+  }
+  await assertLayout(page)
+  await screenshot(page, 'external-zh.png')
+})
+
+test('copying swaps the log copy button to a moss check, blocks a second copy, then reverts', async (t) => {
+  const page = await pageFor(t)
+  const copy = page.getByRole('button', { name: '复制日志', exact: true })
+  const checkOpacity = () => copy.locator('.copy-glyph-check').evaluate((node) => getComputedStyle(node).opacity)
+  assert.equal(await checkOpacity(), '0')
+  assert.equal(await copy.locator('.copy-glyph-check').evaluate((node) => getComputedStyle(node).color), 'rgb(70, 139, 47)')
+
+  await copy.click()
+  await page.waitForFunction(() => window.fixture.copiedText !== null)
+  await page.waitForFunction(() => getComputedStyle(document.querySelector('.copy-glyph-check')).opacity === '1')
+  assert.equal(await copy.getAttribute('data-copied'), 'true')
+  assert.equal(await copy.isDisabled(), true)
+  // The blocked state must not dim the mark, which would wash the green out.
+  assert.equal(await copy.evaluate((node) => getComputedStyle(node).opacity), '1')
+
+  await page.waitForFunction(() => document.querySelector('.copy-button').dataset.copied === 'false', undefined, { timeout: 5000 })
+  assert.equal(await copy.isDisabled(), false)
+  await page.waitForFunction(() => getComputedStyle(document.querySelector('.copy-glyph-check')).opacity === '0')
 })
 
 test('managed restart and empty-output stop appear in the unified log', async (t) => {
@@ -272,17 +324,34 @@ test('language lives in settings, persists, and project link targets this direct
   await page.getByRole('heading', { name: 'Local service', exact: true }).waitFor()
 })
 
+test('autostart switch follows language, defaults off, and reports its change', async (t) => {
+  const page = await pageFor(t)
+  await page.getByRole('button', { name: '软件设置', exact: true }).click()
+  assert.deepEqual(
+    await page.locator('.setting-label > span, .setting-label > label').evaluateAll(labels => labels.map(label => label.textContent)),
+    ['DSH目录', '外观', '语言', '开机自启'],
+  )
+  const toggle = page.getByRole('switch', { name: '开机自启', exact: true })
+  assert.equal(await toggle.getAttribute('aria-checked'), 'false')
+  await screenshot(page, 'settings-autostart-zh.png')
+  await toggle.click()
+  await page.waitForFunction(() => window.fixture.settings.autostart === true)
+  assert.equal(await toggle.getAttribute('aria-checked'), 'true')
+  assert.deepEqual((await callsFor(page, 'set_autostart')).at(-1).args, { enabled: true })
+})
+
 for (const locale of ['zh', 'en']) {
   test(`${locale} log snapshot uses compact columns and one toolbar without toasts`, async (t) => {
     const logEntries = [
       { id: 1, source: 'stdout', severity: 'info', timestamp: '2026-09-30 06:07:08.123', message: 'Server ready' },
       { id: 2, source: 'stderr', severity: 'warn', timestamp: '2026-09-30 06:07:09.456', message: 'Optional configuration missing' },
     ]
-    const levels = locale === 'zh' ? ['信息', '警告'] : ['Info', 'Warning']
+    const levels = locale === 'zh' ? ['信息', '警告'] : ['Info', 'Warn']
+    const displayed = levels.map(level => `[${level}]`)
     const page = await pageFor(t, { locale, status: { logEntries } })
     assert.deepEqual(await page.locator('.log-line').evaluateAll(lines => lines.map(line => [...line.children].map(node => node.textContent))), [
-      ['06:07:08.123', levels[0], 'Server ready'],
-      ['06:07:09.456', levels[1], 'Optional configuration missing'],
+      ['06:07:08.123', displayed[0], 'Server ready'],
+      ['06:07:09.456', displayed[1], 'Optional configuration missing'],
     ])
     assert.equal(await page.locator('.log-timestamp').first().getAttribute('data-tooltip'), '2026-09-30 06:07:08.123 UTC')
     for (const width of [600, 360]) {
@@ -308,7 +377,7 @@ for (const locale of ['zh', 'en']) {
     await page.locator('.log-empty').waitFor()
     await nextPoll(page)
     assert.equal(await page.locator('.log-line').count(), 0)
-    await page.getByRole('button', { name: locale === 'zh' ? '软件设置' : 'App settings', exact: true }).click()
+    await page.getByRole('button', { name: locale === 'zh' ? '软件设置' : 'Settings', exact: true }).click()
     assert.equal(await page.locator('.toolbar-actions').count(), 0)
   })
 
@@ -339,10 +408,10 @@ for (const locale of ['zh', 'en']) {
   test(`${locale} settings align controls, embed the picker and save complete directory edits`, async (t) => {
     const longPath = 'C:\\workspaces\\projects\\a-very-long-directory\\deepseek-harness'
     const page = await pageFor(t, { locale, settings: { dshDirectory: longPath } })
-    await page.getByRole('button', { name: locale === 'zh' ? '软件设置' : 'App settings', exact: true }).click()
+    await page.getByRole('button', { name: locale === 'zh' ? '软件设置' : 'Settings', exact: true }).click()
     assert.deepEqual(await page.locator('.setting-label').evaluateAll(labels => labels.map(label => label.innerText.split('\n').filter(Boolean))), locale === 'zh'
-      ? [['DSH目录', '项目根目录'], ['外观'], ['语言', '界面显示语言']]
-      : [['DSH directory', 'Project root'], ['Appearance'], ['Language', 'Display language']])
+      ? [['DSH目录', '设置DSH程序或者源码的路径'], ['外观', '软件的主题样式模式'], ['语言', '软件的显示语言'], ['开机自启', '是否开机自动静默运行软件']]
+      : [['DSH directory', 'Project root'], ['Appearance', 'Theme style mode of the software'], ['Language', 'Display language'], ['Launch at startup', 'Auto-run the app silently on startup']])
     assert.equal(await page.locator('.settings-app-version').innerText(), `v${metadata.version}`)
     assert.equal(await page.locator('.settings-app-description').innerText(), locale === 'zh'
       ? '简介：启动和管理本地 Web 服务。'
@@ -376,7 +445,7 @@ for (const locale of ['zh', 'en']) {
       })
       assert.equal(inputLayout.inside, true)
       assert.ok(inputLayout.gap >= 6)
-      assert.equal(inputLayout.align, 'right')
+      assert.equal(inputLayout.align, 'left')
       await assertLayout(page, '.settings-panel')
     }
     await screenshot(page, `compact-settings-${locale}.png`)

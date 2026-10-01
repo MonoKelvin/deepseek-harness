@@ -14,8 +14,9 @@
     "clean:port": "node scripts/clean-port.mjs",
     "test:ui": "node --test scripts/ui.test.mjs",
     "tauri": "tauri",
-    "tauri:dev": "node scripts/clean-port.mjs && tauri dev",
-    "tauri:build": "tauri build"
+    "fix-permissions": "node scripts/fix-permissions.mjs",
+    "tauri:dev": "node scripts/clean-port.mjs && node scripts/fix-permissions.mjs && tauri dev",
+    "tauri:build": "node scripts/fix-permissions.mjs && tauri build"
   },
   "dependencies": {
     "@floating-ui/dom": "^1.8.0",

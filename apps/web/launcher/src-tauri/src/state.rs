@@ -10,6 +10,11 @@ pub struct AppSettings {
     pub dsh_directory: Option<String>,
     pub theme: String,
     pub locale: String,
+    /// Whether the launcher starts at sign-in. The OS autostart entry is the
+    /// only stored copy, so this field is read from the plugin per request and
+    /// never persisted to `settings.json`.
+    #[serde(skip)]
+    pub autostart: bool,
 }
 
 impl Default for AppSettings {
@@ -18,6 +23,7 @@ impl Default for AppSettings {
             dsh_directory: None,
             theme: "system".to_string(),
             locale: "zh".to_string(),
+            autostart: false,
         }
     }
 }
@@ -151,12 +157,19 @@ pub fn t_log(locale: &str, key: &str, args: &[(&str, &str)]) -> String {
             ("dsh.using", "Using DSH directory: {dir}"),
             ("dsh.set.invalid", "The specified directory is not a valid DSH project root."),
             ("dsh.set.success", "DSH directory updated successfully."),
+            ("autostart.enabled", "The launcher will now start automatically when you sign in."),
+            ("autostart.disabled", "The launcher will no longer start automatically when you sign in."),
+            ("link.shell", "The launcher runs elevated, so the link was handed to Explorer to open the browser without elevated rights."),
             ("command.start", "Starting command: {command}"),
             ("command.succeeded", "Command succeeded: {command}"),
             ("command.failed", "Command failed: {command}: {error}"),
             ("pnpm.missing", "pnpm was not found on PATH. Install pnpm, or add it to PATH and restart the launcher."),
             ("process.started", "Process started (PID {pid})"),
             ("process.restarted", "Process restarted (PID {pid})"),
+            ("process.kill.result", "Terminated the process holding port {port} (PID {pid})."),
+            ("process.port.held", "Port {port} is still in use after its process was terminated, so another program took it over."),
+            ("process.port.listeners", "Processes still listening on port {port}: {pids}"),
+            ("process.owner.missing", "Port {port} accepts connections but lists no owning process, so the stop could not identify its target."),
             ("process.stop.failed", "Failed to stop dsh web: {error}"),
             ("stream.read.failed", "Failed to read {source}: {error}"),
         ]
@@ -167,12 +180,19 @@ pub fn t_log(locale: &str, key: &str, args: &[(&str, &str)]) -> String {
             ("dsh.using", "使用DSH目录：{dir}"),
             ("dsh.set.invalid", "指定的目录不是有效的DSH项目根目录"),
             ("dsh.set.success", "DSH目录设置成功"),
+            ("autostart.enabled", "已开启开机自启，登录系统后将自动启动启动器"),
+            ("autostart.disabled", "已关闭开机自启"),
+            ("link.shell", "启动器以管理员权限运行，已交由资源管理器以普通权限打开浏览器"),
             ("command.start", "开始执行命令：{command}"),
             ("command.succeeded", "命令执行成功：{command}"),
             ("command.failed", "命令执行失败：{command}：{error}"),
             ("pnpm.missing", "未在 PATH 中找到 pnpm，请安装 pnpm 或将其加入 PATH 后重启启动器"),
             ("process.started", "进程已启动（PID {pid}）"),
             ("process.restarted", "进程已重启（PID {pid}）"),
+            ("process.kill.result", "已终止占用端口 {port} 的进程（PID {pid}）"),
+            ("process.port.held", "终止进程后端口 {port} 仍被占用，端口已被其他程序接管"),
+            ("process.port.listeners", "仍在监听端口 {port} 的进程：{pids}"),
+            ("process.owner.missing", "端口 {port} 仍可连接，但未列出占用它的进程，停止操作无法确定目标"),
             ("process.stop.failed", "停止 dsh web 失败：{error}"),
             ("stream.read.failed", "读取{source}失败：{error}"),
         ]

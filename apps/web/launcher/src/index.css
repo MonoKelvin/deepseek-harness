@@ -15,6 +15,7 @@
     --destructive: 180 48 48;
     --success: 36 119 82;
     --warning: 143 97 27;
+    --moss: 70 139 47;
     --window: 247 248 250;
     --service: 237 241 248;
     --tooltip: 255 255 255;
@@ -37,6 +38,7 @@
     --destructive: 237 146 149;
     --success: 139 197 170;
     --warning: 220 188 136;
+    --moss: 156 201 122;
     --window: 26 29 35;
     --service: 37 43 54;
     --tooltip: 53 59 70;
@@ -106,13 +108,22 @@
 .action-expand:enabled:active { background: rgb(var(--muted)); }
 .action-label { max-width: 0; overflow: hidden; opacity: 0; margin-left: 0; transition: max-width 200ms ease, opacity 160ms ease, margin-left 200ms ease; }
 .action-expand:enabled:is(:hover, :focus-visible) .action-label { max-width: 7em; margin-left: 7px; opacity: 1; }
-.external-note { font-size: 12px; color: rgb(var(--muted-foreground)); }
+.lifecycle-icons { display: flex; align-items: center; gap: 6px; margin-left: auto; }
 
 .details-panel { display: flex; flex: 1; flex-direction: column; min-height: 0; overflow: hidden; border-radius: 16px; background: rgb(var(--background)); }
-.details-toolbar { display: flex; flex-shrink: 0; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 14px 0; }
+.details-toolbar { display: flex; flex-shrink: 0; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 14px; }
 .panel-tabs, .setting-choice { display: flex; width: fit-content; gap: 2px; padding: 3px; border-radius: 12px; background: rgb(var(--muted)); }
+.panel-tabs { padding: 3px; }
+.panel-tabs button { height: 26px; padding: 0 7px; }
 .log-result { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: rgb(var(--muted-foreground)); white-space: nowrap; }
 .log-result[data-failed='true'] { color: rgb(var(--destructive)); }
+.copy-button { position: relative; }
+.copy-glyph, .copy-glyph-check { transition: opacity 180ms ease, transform 180ms ease; }
+.copy-glyph-check { position: absolute; top: 50%; left: 50%; color: rgb(var(--moss)); opacity: 0; transform: translate(-50%, -50%) scale(0.5); }
+.copy-button[data-copied='true'] .copy-glyph { opacity: 0; transform: scale(0.5); }
+.copy-button[data-copied='true'] .copy-glyph-check { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+/* The success mark replaces the disabled look; the block on a second copy is behavioural. */
+.copy-button[data-copied='true']:disabled { opacity: 1; }
 .toolbar-actions { display: inline-flex; flex-shrink: 0; align-items: center; gap: 2px; margin-left: auto; }
 .toolbar-actions .log-result { margin-right: 6px; }
 .log-viewer { display: flex; flex: 1; flex-direction: column; min-height: 0; }
@@ -127,6 +138,10 @@
 .log-level-error { color: rgb(var(--destructive)); }
 .log-level-debug { color: rgb(var(--success)); }
 .log-message { color: rgb(var(--foreground)); }
+/* Colored severities: the message body inherits the level color, not just the tag. */
+.log-line[data-severity='warn'] .log-message { color: rgb(var(--warning)); }
+.log-line[data-severity='error'] .log-message { color: rgb(var(--destructive)); }
+.log-line[data-severity='debug'] .log-message { color: rgb(var(--success)); }
 .log-empty { padding: 3px 0; font-size: 12px; color: rgb(var(--muted-foreground)); }
 .panel-content, .settings-panel { animation: panel-appear 160ms ease-out; }
 @keyframes panel-appear { from { opacity: 0; } to { opacity: 1; } }
@@ -186,6 +201,7 @@
   .details-panel { flex: 1 0 176px; }
   .log-body, .settings-panel { padding: 12px 16px; }
   .settings-fields { gap: 12px; }
+  .setting-row { grid-template-columns: 1fr; row-gap: 6px; }
 }
 @media (hover: none) {
   .action-label { max-width: 7em; margin-left: 7px; opacity: 1; }
