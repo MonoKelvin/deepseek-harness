@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use tauri::{
   menu::{Menu, MenuItem},
-  tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+  tray::{MouseButton, MouseButtonState, TrayIconEvent},
   AppHandle, Manager, State, WindowEvent,
 };
 use tokio::sync::Mutex;
@@ -223,27 +223,18 @@ pub fn run() {
       let toggle = MenuItem::with_id(app, "toggle", "显示 / 隐藏", true, None::<&str>)?;
       let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
       let menu = Menu::with_items(app, &[&toggle, &quit])?;
-      // Dedicated high-contrast tray asset: the app logo is a pale illustration that
-      // reads as near-white and vanishes on the Windows light notification area. This
-      // 32x32 brand-blue whale glyph stays legible on both light and dark trays.
-      let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../../public/tray-icon.png"))
-        .map_err(|e| format!("Failed to load tray icon: {e}"))?;
-      TrayIconBuilder::new()
-        .icon(tray_icon)
-        .tooltip("DSH 启动器")
-        .menu(&menu)
-        .show_menu_on_left_click(false)
-        .on_menu_event(|app, event| match event.id.as_ref() {
-          "toggle" => toggle_main_window(app),
-          "quit" => app.exit(0),
-          _ => {}
-        })
-        .on_tray_icon_event(|tray, event| {
-          if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
-            toggle_main_window(tray.app_handle());
-          }
-        })
-        .build(app)?;
+      let tray = app.tray_by_id("main").expect("configured tray icon");
+      tray.set_menu(Some(menu))?;
+      tray.on_menu_event(|app, event| match event.id.as_ref() {
+        "toggle" => toggle_main_window(app),
+        "quit" => app.exit(0),
+        _ => {}
+      });
+      tray.on_tray_icon_event(|tray, event| {
+        if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
+          toggle_main_window(tray.app_handle());
+        }
+      });
       let main_window = app.get_webview_window("main").expect("configured main window");
       #[cfg(target_os = "windows")]
       window::configure(&main_window.as_ref().window())?;
