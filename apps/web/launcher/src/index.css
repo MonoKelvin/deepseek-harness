@@ -115,9 +115,8 @@
 
 .details-panel { display: flex; flex: 1; flex-direction: column; min-height: 0; overflow: hidden; border-radius: 16px; background: rgb(var(--background)); }
 .details-toolbar { display: flex; flex-shrink: 0; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 14px; }
-.panel-tabs, .setting-choice { display: flex; width: fit-content; gap: 2px; padding: 3px; border-radius: 12px; background: rgb(var(--muted)); }
-.panel-tabs { padding: 3px; }
-.panel-tabs button { height: 26px; padding: 0 7px; }
+.panel-tabs { display: flex; width: fit-content; gap: 2px; padding: 3px; border-radius: 12px; background: rgb(var(--muted)); }
+.panel-tabs button, .compact-choice > button { height: 26px; padding: 0 7px; }
 .log-result { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: rgb(var(--muted-foreground)); white-space: nowrap; }
 .log-result[data-failed='true'] { color: rgb(var(--destructive)); }
 .copy-button { position: relative; }
@@ -170,7 +169,7 @@
 .setting-error { grid-column: 1 / -1; margin: 0; text-align: right; font-size: 11px; color: rgb(var(--destructive)); }
 .compact-choice { position: relative; display: inline-flex; gap: 2px; padding: 3px; border-radius: 9px; background: rgb(var(--muted)); }
 .segment-indicator { position: absolute; top: 3px; bottom: 3px; left: 0; border-radius: 7px; background: rgb(var(--background)); box-shadow: 0 1px 2px rgb(0 0 0 / 0.12); z-index: 0; pointer-events: none; transition: left 0.22s cubic-bezier(0.4, 0, 0.2, 1), width 0.22s cubic-bezier(0.4, 0, 0.2, 1); }
-.compact-choice > button { position: relative; z-index: 1; height: 26px; padding: 0 7px; font-size: 11px; }
+.compact-choice > button { position: relative; z-index: 1; font-size: 11px; }
 .compact-choice > button[aria-pressed='true'] { background: transparent; box-shadow: none; }
 .settings-about { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; margin-top: 20px; color: rgb(var(--muted-foreground)); font-size: 12px; }
 .settings-open-source { display: flex; flex-direction: column; gap: 2px; min-width: 0; }

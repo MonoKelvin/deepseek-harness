@@ -3,23 +3,22 @@ import { useCallback, useLayoutEffect, useState } from 'react'
 export type ThemePreference = 'system' | 'light' | 'dark'
 const storageKey = 'dsh-launcher-theme'
 
-function initialTheme(): ThemePreference {
+function readStoredTheme(): ThemePreference | null {
   try {
     const value = localStorage.getItem(storageKey)
-    return value === 'light' || value === 'dark' ? value : 'system'
+    return value === 'light' || value === 'dark' ? value : null
   } catch {
-    return 'system'
+    return null
   }
+}
+
+function initialTheme(): ThemePreference {
+  return readStoredTheme() ?? 'system'
 }
 
 /** True when the user has explicitly chosen a theme (it is persisted). */
 export function hasStoredTheme(): boolean {
-  try {
-    const value = localStorage.getItem(storageKey)
-    return value === 'light' || value === 'dark'
-  } catch {
-    return false
-  }
+  return readStoredTheme() !== null
 }
 
 /** Persist the chosen theme and follow OS changes only in system mode. */
