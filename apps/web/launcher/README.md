@@ -47,5 +47,6 @@ Checks cover service ownership, operation feedback, repeated clicks, long logs, 
 ## Notes
 
 - `dsh web` listens on `http://127.0.0.1:3080` by default.
+- Service and dependency operations run `pnpm` in the DSH project root, so pnpm must be installed and reachable on `PATH`.
 - Closing the window hides it to the system tray; use the tray menu to exit.
 - The translucent background artwork responds subtly to mouse movement, but stays still for touch input or reduced-motion preferences.

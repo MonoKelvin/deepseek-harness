@@ -1,4 +1,6 @@
 use std::collections::VecDeque;
+#[cfg(target_os = "windows")]
+use std::ffi::OsStr;
 use std::io;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -48,6 +50,10 @@ pub struct CommandOutput {
 const DEFAULT_PORT: u16 = 3080;
 const DEFAULT_HOST: &str = "127.0.0.1";
 const MAX_LOG_ENTRIES: usize = 200;
+
+/// Executable suffixes to try when the host does not define `PATHEXT`.
+#[cfg(target_os = "windows")]
+const DEFAULT_PATHEXT: &str = ".COM;.EXE;.BAT;.CMD";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -294,13 +300,61 @@ async fn drain_streams(
   )
 }
 
+/// Find `program` under `search_path`, appending each `extensions` suffix in order.
+/// Suffixes carry their leading dot, matching the `PATHEXT` format.
+#[cfg(target_os = "windows")]
+fn resolve_in_path(program: &str, search_path: &OsStr, extensions: &str) -> Option<PathBuf> {
+  for dir in std::env::split_paths(search_path) {
+    if dir.as_os_str().is_empty() {
+      continue;
+    }
+    for ext in extensions.split(';').filter(|ext| !ext.is_empty()) {
+      let candidate = dir.join(format!("{program}{ext}"));
+      if candidate.is_file() {
+        return Some(candidate);
+      }
+    }
+  }
+  None
+}
+
+/// Build the command that runs pnpm, or a localized reason pnpm cannot be located.
+///
+/// Windows resolves bare command names through `PATHEXT`, but Rust's process
+/// spawning only appends `.exe`, so the `pnpm.cmd` shim that npm and corepack
+/// install reports "program not found". Spawning the resolved path works because
+/// `CreateProcess` runs a batch file through `cmd.exe` and Rust escapes the
+/// arguments for it.
+#[cfg(target_os = "windows")]
+fn pnpm_command(locale: &str) -> Result<tokio::process::Command, String> {
+  let search_path = std::env::var_os("PATH").unwrap_or_default();
+  let extensions = std::env::var("PATHEXT").unwrap_or_else(|_| DEFAULT_PATHEXT.to_string());
+  let program = resolve_in_path("pnpm", &search_path, &extensions)
+    .ok_or_else(|| crate::state::t_log(locale, "pnpm.missing", &[]))?;
+  Ok(tokio::process::Command::new(program))
+}
+
+/// Build the command that runs pnpm. `PATH` lookup needs no suffix handling here,
+/// so an unresolvable name surfaces as the spawn error.
+#[cfg(not(target_os = "windows"))]
+fn pnpm_command(_locale: &str) -> Result<tokio::process::Command, String> {
+  Ok(tokio::process::Command::new("pnpm"))
+}
+
 /// Stream a short-lived pnpm command into shared logs and retain its output for the result.
 pub async fn run_pnpm(args: &[&str], logs: &SharedLogBuffer, settings: &crate::state::AppSettings) -> CommandOutput {
   let locale = crate::state::current_locale(settings);
   let command = format!("pnpm {}", args.join(" "));
   append_log(logs, LogSource::Launcher, LogSeverity::Info, crate::state::t_log(&locale, "command.start", &[("command", &command)])).await;
   let root = repo_root_from_settings(settings);
-  let mut child = match tokio::process::Command::new("pnpm")
+  let mut pnpm = match pnpm_command(&locale) {
+    Ok(pnpm) => pnpm,
+    Err(error) => {
+      log_command_result(logs, &locale, &command, Err(&error)).await;
+      return CommandOutput { success: false, stdout: String::new(), stderr: error };
+    }
+  };
+  let mut child = match pnpm
     .args(args)
     .current_dir(&root)
     .stdout(Stdio::piped())
@@ -352,7 +406,14 @@ pub async fn run_pnpm(args: &[&str], logs: &SharedLogBuffer, settings: &crate::s
 pub async fn start_dsh_web(manager: &mut ServerManager, settings: &crate::state::AppSettings) -> Result<u32, String> {
   let locale = crate::state::current_locale(settings);
   append_log(&manager.logs, LogSource::Launcher, LogSeverity::Info, crate::state::t_log(&locale, "command.start", &[("command", "pnpm dsh web")])).await;
-  let mut child = match tokio::process::Command::new("pnpm")
+  let mut pnpm = match pnpm_command(&locale) {
+    Ok(pnpm) => pnpm,
+    Err(error) => {
+      log_command_result(&manager.logs, &locale, "pnpm dsh web", Err(&error)).await;
+      return Err(error);
+    }
+  };
+  let mut child = match pnpm
     .args(["dsh", "web"])
     .current_dir(repo_root_from_settings(settings))
     .stdout(Stdio::piped())
@@ -381,9 +442,39 @@ pub async fn start_dsh_web(manager: &mut ServerManager, settings: &crate::state:
   Ok(pid)
 }
 
+/// Terminate `pid` together with every process it started.
+///
+/// Windows reaches pnpm through its `pnpm.cmd` shim, so the launcher's direct
+/// child is a `cmd.exe` whose descendants include the node server holding the
+/// port. Terminating only the direct child leaves that server running, which the
+/// launcher then reports as an external service it cannot stop. `taskkill`
+/// reports a nonzero status when the tree has already exited, which is not a
+/// stop failure, so only an inability to run it is an error.
+#[cfg(target_os = "windows")]
+async fn terminate_process_tree(pid: u32) -> io::Result<()> {
+  tokio::process::Command::new("taskkill")
+    .args(["/F", "/T", "/PID", &pid.to_string()])
+    .stdout(Stdio::null())
+    .stderr(Stdio::null())
+    .status()
+    .await
+    .map(|_| ())
+}
+
 /// Stop the managed child, then dispose its output task before returning.
 pub async fn stop_dsh_web(manager: &mut ServerManager) -> Result<(), String> {
   let locale = crate::state::current_locale(&crate::state::AppSettings::default());
+  // Take the descendants down first: terminating the direct child orphans them.
+  #[cfg(target_os = "windows")]
+  {
+    if let Some(pid) = manager.pid {
+      if let Err(error) = terminate_process_tree(pid).await {
+        let error = format!("Failed to stop dsh web: {error}");
+        log_command_result(&manager.logs, &locale, "stop", Err(&error)).await;
+        return Err(error);
+      }
+    }
+  }
   if let Some(child) = manager.child.as_mut() {
     if let Err(error) = child.kill().await {
       let error = format!("Failed to stop dsh web: {error}");
@@ -397,7 +488,6 @@ pub async fn stop_dsh_web(manager: &mut ServerManager) -> Result<(), String> {
   }
   manager.child = None;
   manager.pid = None;
-  let locale = crate::state::current_locale(&crate::state::AppSettings::default());
   log_command_result(&manager.logs, &locale, "stop", Ok(())).await;
   Ok(())
 }
@@ -486,5 +576,79 @@ mod tests {
     log_command_result(&logs, "zh", "build", Ok(())).await;
     assert!(log_entries(&logs).await[0].message.contains("build"));
     assert_eq!(log_entries(&logs).await[0].severity, LogSeverity::Info);
+  }
+
+  #[cfg(target_os = "windows")]
+  #[test]
+  fn a_pnpm_shim_resolves_only_when_its_suffix_is_searched() {
+    let dir = std::env::temp_dir().join(format!("dsh-launcher-pathext-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("pnpm.cmd"), "@echo off\n").unwrap();
+    let search_path = std::env::join_paths([&dir]).unwrap();
+    // PATHEXT casing reaches the resolved path, which Windows matches case-insensitively.
+    let resolved = resolve_in_path("pnpm", &search_path, ".EXE;.CMD").expect("the shim resolves");
+    assert_eq!(resolved.parent(), Some(dir.as_path()));
+    assert!(resolved.file_name().unwrap().eq_ignore_ascii_case("pnpm.cmd"));
+    assert_eq!(resolve_in_path("pnpm", &search_path, ".EXE"), None);
+    std::fs::remove_dir_all(&dir).unwrap();
+  }
+
+  /// `tasklist` prints the image name only for a live match.
+  #[cfg(target_os = "windows")]
+  fn image_is_running(image: &str) -> bool {
+    let output = std::process::Command::new("tasklist")
+      .args(["/FI", &format!("IMAGENAME eq {image}"), "/NH"])
+      .output()
+      .expect("tasklist runs");
+    String::from_utf8_lossy(&output.stdout).contains(image)
+  }
+
+  #[cfg(target_os = "windows")]
+  async fn settles_to(image: &str, running: bool) -> bool {
+    for _ in 0..100 {
+      if image_is_running(image) == running {
+        return true;
+      }
+      tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    false
+  }
+
+  #[cfg(target_os = "windows")]
+  #[tokio::test]
+  async fn stopping_a_shim_also_terminates_its_descendant() {
+    let dir = std::env::temp_dir().join(format!("dsh-launcher-tree-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    // A uniquely named copy of ping stands in for the node server, so the
+    // liveness check cannot match an unrelated process.
+    let leaf_name = format!("dsh-leaf-{}.exe", std::process::id());
+    let leaf = dir.join(&leaf_name);
+    let system_root = std::env::var("SystemRoot").expect("Windows defines SystemRoot");
+    std::fs::copy(PathBuf::from(system_root).join("System32").join("PING.EXE"), &leaf).unwrap();
+    let shim = dir.join("leaf-shim.cmd");
+    std::fs::write(&shim, format!("@echo off\r\n\"{}\" -n 60 127.0.0.1 >nul\r\n", leaf.display())).unwrap();
+
+    let mut child = tokio::process::Command::new(&shim)
+      .stdout(Stdio::null())
+      .stderr(Stdio::null())
+      .spawn()
+      .unwrap();
+    let pid = child.id().expect("newly spawned child has a PID");
+    assert!(settles_to(&leaf_name, true).await, "the shim started its descendant");
+
+    terminate_process_tree(pid).await.unwrap();
+    assert!(settles_to(&leaf_name, false).await, "the descendant stopped with the tree");
+
+    let _ = child.wait().await;
+    let _ = std::fs::remove_dir_all(&dir);
+  }
+
+  #[cfg(target_os = "windows")]
+  #[tokio::test]
+  async fn stopping_an_exited_tree_is_not_a_failure() {
+    let mut child = tokio::process::Command::new("cmd").args(["/C", "exit"]).spawn().unwrap();
+    let pid = child.id().expect("newly spawned child has a PID");
+    child.wait().await.unwrap();
+    assert!(terminate_process_tree(pid).await.is_ok());
   }
 }
