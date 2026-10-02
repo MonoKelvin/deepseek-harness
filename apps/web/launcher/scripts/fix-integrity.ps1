@@ -48,10 +48,15 @@ $current = Get-IntegrityLabel -Path $ProjectDir
 Write-Host "[fix-integrity] project: $ProjectDir"
 Write-Host "[fix-integrity] integrity label: $current"
 
-# Detect an inherited deny-delete ACE (also part of the sandbox hardening).
+# Detect the sandbox's inherited delete-protection ACE specifically: a deny ACE
+# carrying the (DC) delete-child right (e.g. "Everyone:(CI)(DENY)(DC)"). Matching
+# only lines with both (DENY) and (DC) avoids tripping on unrelated deny ACEs
+# that corporate/AV policies add elsewhere, which a bare "DENY" scan would catch
+# and then needlessly trigger a UAC-elevated whole-tree reset.
 $raw = icacls $ProjectDir 2>$null
-$hasDeny = if ($raw | Select-String 'DENY') { $true } else { $false }
-if ($hasDeny) { Write-Host '[fix-integrity] inherited deny-delete (DENY) ACE present.' }
+$denyAce = $raw | Where-Object { $_ -match '\(DENY\)' -and $_ -match '\(DC\)' }
+$hasDeny = [bool]$denyAce
+if ($hasDeny) { Write-Host '[fix-integrity] inherited deny-delete (DENY/DC) ACE present.' }
 
 # Act when a Low / Untrusted label OR a deny-delete ACE is present.
 $needsFix = ($current -eq 'Low Mandatory Level') -or ($current -eq 'Untrusted Mandatory Level') -or $hasDeny

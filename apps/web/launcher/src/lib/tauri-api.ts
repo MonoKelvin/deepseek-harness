@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
-import type { ServerStatusInfo, AppSettings, LogLevel } from '../types/server-status'
+import type { ServerStatusInfo, AppSettings } from '../types/server-status'
 
 export type { ServerStatusInfo, AppSettings, LogLevel } from '../types/server-status'
 
@@ -44,6 +44,11 @@ export async function setStopServicesOnExit(enabled: boolean): Promise<AppSettin
   return invoke<AppSettings>('set_stop_services_on_exit', { enabled })
 }
 
+/** Persist the port the dsh web service is expected to listen on. */
+export async function setServerPort(port: number): Promise<AppSettings> {
+  return invoke<AppSettings>('set_server_port', { port })
+}
+
 /** Clear the backend log buffer without resetting entry IDs. */
 export async function clearLogs(): Promise<void> {
   await invoke('clear_logs')
@@ -52,6 +57,11 @@ export async function clearLogs(): Promise<void> {
 /** Open a directory picker dialog; returns the selected path or null. */
 export async function openDirectoryPicker(): Promise<string | null> {
   return invoke<string | null>('open_directory_picker')
+}
+
+/** Whether the launcher was started silently by the sign-in autostart entry. */
+export function isAutostartLaunch(): Promise<boolean> {
+  return invoke<boolean>('is_autostart_launch')
 }
 
 /** Install workspace dependencies through the launcher backend. */

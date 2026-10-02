@@ -15,7 +15,7 @@
   <img src="https://img.shields.io/badge/Rust-stable-000000?logo=rust&logoColor=white" alt="Rust" />
   <img src="https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black" alt="React 18" />
   <img src="https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white" alt="TypeScript 5" />
-  <img src="https://img.shields.io/badge/version-0.1.0-blue" alt="Version 0.1.0" />
+  <img src="https://img.shields.io/github/package-json/v/MonoKelvin/deepseek-harness?filename=apps/web/launcher/package.json&label=version" alt="Version" />
   <img src="https://img.shields.io/badge/license-MIT-green" alt="License: MIT" />
 </p>
 
@@ -32,6 +32,10 @@ terminal with `pnpm dsh web`. **DSH Web Launcher** wraps that in a small desktop
 window, so you can manage the server, install dependencies, and build the
 frontend without touching the command line.
 
+<p align="center">
+  <img src="public/screenshot001.png" alt="DSH Web Launcher screenshot" width="520" />
+</p>
+
 ## ✨ Features
 
 - 🟢 **One-click lifecycle** — the main button adapts to state (Start → Open →
@@ -41,9 +45,9 @@ frontend without touching the command line.
 - 📜 **Unified live log** — backend, frontend, and IPC messages stream into one
   view; warnings and errors stay in the log (no dialogs or toasts), with Copy
   and Clear in the toolbar.
-- ⚙️ **Persisted settings** — project directory, theme, language,
-  launch-at-startup (off by default), and stop-on-exit (on by default; stops
-  only the service this launcher started).
+- ⚙️ **Persisted settings** — project directory, server port, theme, language,
+  launch-at-startup (off by default), and stop-on-exit (on by default; stops the
+  dsh service running on the configured port when the launcher quits).
 - 🖥️ **System tray** — closing the window hides it to the tray; quit from there.
 - 🌏 **Bilingual UI** — Simplified Chinese and English.
 
@@ -107,6 +111,7 @@ npm run tauri:build  # compile a release build (and Tauri's MSI)
 | `npm run package` | Portable exe **and** Inno Setup installer (Windows) |
 | `npm run test:ui` | Playwright UI checks |
 | `npm run clean:port` | Free the dev port `5173` if it is stuck |
+| `npm run icons` | Regenerate app icons from the master art (needs `sharp` from the workspace) |
 
 ## 📦 Packaging (Windows)
 
@@ -141,7 +146,9 @@ npm run test:ui
 
 ## 💡 Notes & FAQ
 
-- **Port** — `dsh web` listens on `http://127.0.0.1:3080` by default.
+- **Port** — `dsh web` listens on `http://127.0.0.1:3080` by default. If yours
+  differs, set it in Settings → Server port so the launcher watches, opens, and
+  stops the right one.
 - **pnpm required** — service and dependency operations run `pnpm` in the DSH
   project root, so pnpm must be installed and on `PATH`.
 

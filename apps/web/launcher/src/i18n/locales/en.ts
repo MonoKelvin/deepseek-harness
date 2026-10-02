@@ -3,7 +3,7 @@ import { zh } from './zh'
 export const en: Record<keyof typeof zh, string> = {
   'app.title': 'DSH Launcher',
   'app.views': 'Content',
-  'app.description': 'About: Start and manage the local web service.',
+  'app.description': 'A tool to start, stop, and monitor your local DeepSeek Harness web service.',
   'titlebar.close': 'Hide to tray',
   'status.title': 'Local service',
   'status.state.stopped': 'Not started',
@@ -61,6 +61,9 @@ export const en: Record<keyof typeof zh, string> = {
   'settings.dshDirectoryPlaceholder': 'Auto-detect',
   'settings.dshDirectoryInvalid': 'The DSH directory is missing or invalid',
   'settings.dshDirectoryBrowse': 'Choose DSH directory',
+  'settings.serverPort': 'Server port',
+  'settings.serverPortHint': 'Port the dsh service listens on',
+  'settings.serverPortLocked': 'Stop the service to change the port',
   'settings.version': 'Version',
   'settings.openSource': 'Open source',
   'settings.license': 'MIT License © MonoStudio',

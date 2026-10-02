@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { getStatus, type ServerStatusInfo } from '../lib/tauri-api'
+import { POLL_INTERVAL_MS } from '../lib/constants'
 
 export interface ServerStatusResult {
   status: ServerStatusInfo | null
@@ -17,7 +18,7 @@ export interface ServerStatusResult {
  * settles instead of being dropped, so an action's effect shows up without
  * waiting for the next interval.
  */
-export function useServerStatus(pollIntervalMs: number = 2000): ServerStatusResult {
+export function useServerStatus(pollIntervalMs: number = POLL_INTERVAL_MS): ServerStatusResult {
   const [status, setStatus] = useState<ServerStatusInfo | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)

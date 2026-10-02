@@ -4,11 +4,12 @@ import { createRequire } from 'node:module'
 import { mkdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { DEV_PORT } from './constants.mjs'
 
 const require = createRequire(new URL('../../package.json', import.meta.url))
 const { chromium } = require('playwright')
 const metadata = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
-const url = process.env.LAUNCHER_TEST_URL ?? 'http://localhost:5173'
+const url = process.env.LAUNCHER_TEST_URL ?? `http://localhost:${DEV_PORT}`
 const screenshots = join(tmpdir(), 'dsh-launcher-ui')
 let browser
 
@@ -18,7 +19,7 @@ before(async () => {
 })
 after(async () => { await browser?.close(); console.log(`Screenshots: ${screenshots}`) })
 
-async function pageFor(t, fixture = {}, viewport = { width: 560, height: 420 }) {
+async function pageFor(t, fixture = {}, viewport = { width: 620, height: 480 }) {
   const page = await browser.newPage({ viewport, deviceScaleFactor: 1, reducedMotion: fixture.reducedMotion ? 'reduce' : 'no-preference', hasTouch: Boolean(fixture.touch), colorScheme: fixture.systemTheme ?? 'light' })
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
@@ -30,7 +31,7 @@ async function pageFor(t, fixture = {}, viewport = { width: 560, height: 420 }) 
       calls: [],
       status: { state: 'stopped', port: 3080, url: null, pid: null, external: false, logEntries: [], error: null, ...fixture.status },
       statusError: fixture.statusError, hold: fixture.hold, reject: fixture.reject,
-      settings: { dshDirectory: 'C:\\code\\deepseek-harness', theme: 'system', locale: 'zh', autostart: false, stopServicesOnExit: true, ...fixture.settings },
+      settings: { dshDirectory: 'C:\\code\\deepseek-harness', theme: 'system', locale: 'zh', port: 3080, autostart: false, stopServicesOnExit: true, ...fixture.settings },
       failures: fixture.failures ?? {},
       pickedDirectory: fixture.pickedDirectory ?? null,
       directoryValid: fixture.directoryValid ?? true,
@@ -70,6 +71,10 @@ async function pageFor(t, fixture = {}, viewport = { width: 560, height: 420 }) 
         data.calls.push({ command, args })
         if (command === 'plugin:event|listen') return args.handler
         if (command === 'plugin:event|unlisten') return null
+        // The window reveals itself on mount; treat window commands as no-ops and
+        // report a non-silent launch so the reveal path runs without logging.
+        if (command.startsWith('plugin:window|')) return null
+        if (command === 'is_autostart_launch') return false
         if (data.failures[command]) throw new Error(data.failures[command])
         if (command === 'plugin:app|version') return version
         if (command === 'get_settings') return structuredClone(data.settings)
@@ -97,6 +102,10 @@ async function pageFor(t, fixture = {}, viewport = { width: 560, height: 420 }) 
         }
         if (command === 'set_stop_services_on_exit') {
           data.settings.stopServicesOnExit = args.enabled
+          return structuredClone(data.settings)
+        }
+        if (command === 'set_server_port') {
+          data.settings.port = args.port
           return structuredClone(data.settings)
         }
         if (command === 'get_status') {
@@ -131,7 +140,10 @@ async function assertLayout(page, content = '.log-body') {
   }, content)
   assert.equal(measures.overflow, false)
   assert.ok(measures.height > 40)
-  if (page.viewportSize().width > 420 && page.viewportSize().height > 380) assert.equal(measures.scrolls, false)
+  // The window carries a 30px transparent shadow gutter on every side, so the
+  // content fills the viewport minus 60px per axis; these large-window thresholds
+  // are the old 420x380 content floor plus that gutter.
+  if (page.viewportSize().width > 480 && page.viewportSize().height > 440) assert.equal(measures.scrolls, false)
 }
 const callsFor = (page, command) => page.evaluate((command) => window.fixture.calls.filter((call) => call.command === command), command)
 async function screenshot(page, name) { await page.mouse.move(0, 0); await page.screenshot({ animations: 'disabled', path: join(screenshots, name) }) }
@@ -281,7 +293,7 @@ test('same text with distinct IDs survives polls, and settings does not pause lo
   assert.equal(await page.locator('[data-log-id]').count(), 200)
   await assertLayout(page)
   await screenshot(page, 'running-zh.png')
-  await page.setViewportSize({ width: 360, height: 420 })
+  await page.setViewportSize({ width: 420, height: 480 })
   await assertLayout(page)
 })
 
@@ -332,7 +344,7 @@ test('autostart switch follows language, defaults off, and reports its change', 
   await page.getByRole('button', { name: '软件设置', exact: true }).click()
   assert.deepEqual(
     await page.locator('.setting-label > span, .setting-label > label').evaluateAll(labels => labels.map(label => label.textContent)),
-    ['DSH目录', '外观', '语言', '开机自启', '退出时停止服务'],
+    ['DSH目录', '服务端口', '外观', '语言', '开机自启', '退出时停止服务'],
   )
   const toggle = page.getByRole('switch', { name: '开机自启', exact: true })
   assert.equal(await toggle.getAttribute('aria-checked'), 'false')
@@ -354,6 +366,28 @@ test('stop-on-exit switch defaults on and reports its change', async (t) => {
   assert.deepEqual((await callsFor(page, 'set_stop_services_on_exit')).at(-1).args, { enabled: false })
 })
 
+test('server port shows the persisted value, saves a valid edit, and rejects an invalid one', async (t) => {
+  const page = await pageFor(t)
+  await page.getByRole('button', { name: '软件设置', exact: true }).click()
+  const input = page.locator('#server-port')
+  assert.equal(await input.inputValue(), '3080')
+  await input.fill('4000')
+  await input.blur()
+  await page.waitForFunction(() => window.fixture.settings.port === 4000)
+  assert.deepEqual((await callsFor(page, 'set_server_port')).at(-1).args, { port: 4000 })
+  // An out-of-range port is not sent and the field snaps back to the saved value.
+  await input.fill('70000')
+  await input.blur()
+  assert.equal(await input.inputValue(), '4000')
+  assert.equal((await callsFor(page, 'set_server_port')).length, 1)
+})
+
+test('server port is locked while the service is running', async (t) => {
+  const page = await pageFor(t, { status: { state: 'running-managed', pid: 4242, url: 'http://127.0.0.1:3080/' } })
+  await page.getByRole('button', { name: '软件设置', exact: true }).click()
+  assert.equal(await page.locator('#server-port').isDisabled(), true)
+})
+
 for (const locale of ['zh', 'en']) {
   test(`${locale} log snapshot uses compact columns and one toolbar without toasts`, async (t) => {
     const logEntries = [
@@ -368,8 +402,8 @@ for (const locale of ['zh', 'en']) {
       ['06:07:09.456', displayed[1], 'Optional configuration missing'],
     ])
     assert.equal(await page.locator('.log-timestamp').first().getAttribute('data-tooltip'), '2026-09-30 06:07:08.123 UTC')
-    for (const width of [600, 360]) {
-      await page.setViewportSize({ width, height: 480 })
+    for (const width of [660, 420]) {
+      await page.setViewportSize({ width, height: 540 })
       const measures = await page.evaluate(() => {
         const tabs = document.querySelector('.panel-tabs').getBoundingClientRect()
         const actions = document.querySelector('.toolbar-actions').getBoundingClientRect()
@@ -396,7 +430,7 @@ for (const locale of ['zh', 'en']) {
   })
 
   test(`${locale} directory error stays inside the status badge with a localized tooltip`, async (t) => {
-    const page = await pageFor(t, { locale, status: { dshDirectoryValid: false, error: 'DSH directory not configured' } }, { width: 360, height: 480 })
+    const page = await pageFor(t, { locale, status: { dshDirectoryValid: false, error: 'DSH directory not configured' } }, { width: 420, height: 540 })
     const explanation = locale === 'zh'
       ? 'DSH 目录未配置或无效，请在软件设置中指定项目根目录。'
       : 'The DSH directory is missing or invalid. Select the project root in App settings.'
@@ -424,14 +458,14 @@ for (const locale of ['zh', 'en']) {
     const page = await pageFor(t, { locale, settings: { dshDirectory: longPath } })
     await page.getByRole('button', { name: locale === 'zh' ? '软件设置' : 'Settings', exact: true }).click()
     assert.deepEqual(await page.locator('.setting-label').evaluateAll(labels => labels.map(label => label.innerText.split('\n').filter(Boolean))), locale === 'zh'
-      ? [['DSH目录', '设置DSH程序或者源码的路径'], ['外观', '软件的主题样式模式'], ['语言', '软件的显示语言'], ['开机自启', '是否开机自动静默运行软件'], ['退出时停止服务', '退出软件时一并停止服务']]
-      : [['DSH directory', 'Project root'], ['Appearance', 'Theme style mode of the software'], ['Language', 'Display language'], ['Launch at startup', 'Auto-run the app silently on startup'], ['Stop on exit', 'Stop the service when the app exits']])
+      ? [['DSH目录', '设置DSH程序或者源码的路径'], ['服务端口', 'dsh 服务监听的端口'], ['外观', '软件的主题样式模式'], ['语言', '软件的显示语言'], ['开机自启', '是否开机自动静默运行软件'], ['退出时停止服务', '退出软件时一并停止服务']]
+      : [['DSH directory', 'Project root'], ['Server port', 'Port the dsh service listens on'], ['Appearance', 'Theme style mode of the software'], ['Language', 'Display language'], ['Launch at startup', 'Auto-run the app silently on startup'], ['Stop on exit', 'Stop the service when the app exits']])
     assert.equal(await page.locator('.settings-app-version').innerText(), `v${metadata.version}`)
     assert.equal(await page.locator('.settings-app-description').innerText(), locale === 'zh'
-      ? '简介：启动和管理本地 Web 服务。'
-      : 'About: Start and manage the local web service.')
-    for (const width of [600, 360]) {
-      await page.setViewportSize({ width, height: 480 })
+      ? '一款用于启动、停止并监控本地 DeepSeek Harness Web端服务的工具软件。'
+      : 'A tool to start, stop, and monitor your local DeepSeek Harness web service.')
+    for (const width of [660, 420]) {
+      await page.setViewportSize({ width, height: 540 })
       const rows = await page.locator('.setting-row').evaluateAll(rows => rows.map(row => {
         const label = row.querySelector('.setting-label')
         const value = row.querySelector('.setting-control').firstElementChild
@@ -451,7 +485,7 @@ for (const locale of ['zh', 'en']) {
         assert.equal(row.textAlign, 'left')
         assert.equal(row.captionFits, true)
       }
-      const inputLayout = await page.locator('.setting-input').evaluate(input => {
+      const inputLayout = await page.locator('#dsh-directory').evaluate(input => {
         const bounds = input.getBoundingClientRect()
         const button = input.parentElement.querySelector('button').getBoundingClientRect()
         const style = getComputedStyle(input)
@@ -475,7 +509,7 @@ for (const locale of ['zh', 'en']) {
     assert.equal((await callsFor(page, 'set_dsh_directory')).length, 1)
     await page.evaluate(path => { window.fixture.pickedDirectory = path }, longPath)
     await picker.click()
-    await page.waitForFunction(path => document.querySelector('.setting-input').value === path, longPath)
+    await page.waitForFunction(path => document.querySelector('#dsh-directory').value === path, longPath)
     assert.equal((await callsFor(page, 'set_dsh_directory')).length, 2)
   })
 }
@@ -487,7 +521,7 @@ test('status errors are translated, retained, and not repeated on every failed p
   assert.equal(await page.locator('.log-line').count(), 1)
   assert.equal(await page.locator('.status-error-icon').getAttribute('data-tooltip'), '启动器状态尚未初始化，请重启启动器。')
   await page.getByRole('button', { name: '软件设置', exact: true }).click()
-  assert.equal(await page.locator('.setting-input').getAttribute('aria-invalid'), 'false')
+  assert.equal(await page.locator('#dsh-directory').getAttribute('aria-invalid'), 'false')
   await page.getByRole('button', { name: 'English', exact: true }).click()
   await page.getByRole('button', { name: 'Logs', exact: true }).click()
   await page.locator('.log-message').getByText('Local service failed: The launcher state is not initialized. Restart the launcher.', { exact: true }).waitFor()
@@ -517,7 +551,9 @@ test('clipboard, clear, settings and picker failures remain visible as logs', as
 })
 
 test('one delegated tooltip handles viewport edges, dynamic content and removal', async (t) => {
-  const page = await pageFor(t)
+  // Pinned to the pre-gutter viewport: this exercises the delegated tooltip's
+  // clamp to the window edges, which tracks the viewport, not the launcher content.
+  const page = await pageFor(t, {}, { width: 560, height: 420 })
   assert.equal(await page.locator('[role="tooltip"]').count(), 1)
   for (const [left, top] of [[4, 4], [520, 4], [4, 380], [520, 380]]) {
     await page.evaluate(({ left, top }) => {

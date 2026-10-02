@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use tauri::{
   menu::{Menu, MenuItem},
@@ -26,13 +27,16 @@ pub struct AppState {
   manager: SharedManager,
   logs: SharedLogBuffer,
   settings: SharedSettings,
+  /// Set once the on-exit shutdown has run (or the user chose to exit anyway),
+  /// so the re-issued `app.exit` passes straight through `ExitRequested`.
+  exit_ready: Arc<AtomicBool>,
 }
 
 #[tauri::command]
 async fn get_status(state: State<'_, AppState>) -> Result<ServerStatusInfo, String> {
   let settings = state.settings.lock().await.clone();
   let dsh_valid = state::resolve_dsh_root(&settings).is_some();
-  let mut info = build_status(&state.manager, dsh_valid).await;
+  let mut info = build_status(&state.manager, dsh_valid, settings.port).await;
   info.error = if dsh_valid {
     None
   } else {
@@ -116,6 +120,19 @@ async fn set_stop_services_on_exit(state: State<'_, AppState>, app_handle: AppHa
   let locale = state::current_locale(&result);
   let key = if enabled { "stopOnExit.enabled" } else { "stopOnExit.disabled" };
   append_log(&state.logs, LogSource::Launcher, LogSeverity::Info, state::t_log(&locale, key, &[])).await;
+  Ok(result)
+}
+
+/// Persist the port the dsh web service is expected to listen on, so the
+/// launcher watches, opens, and stops the server on the port the user runs.
+#[tauri::command]
+async fn set_server_port(state: State<'_, AppState>, app_handle: AppHandle, port: u16) -> Result<AppSettings, String> {
+  let result = {
+    let mut settings = state.settings.lock().await;
+    settings.port = port;
+    settings.clone()
+  };
+  save_settings(&app_handle, &result);
   Ok(result)
 }
 
@@ -258,22 +275,82 @@ fn toggle_main_window(app: &AppHandle) {
   }
 }
 
-/// Stop the managed dsh service the way the UI's stop button does when the
-/// launcher is configured to stop services on exit, so no exit path leaves the
-/// service it started orphaned. Only a service this launcher started is stopped;
-/// one another program started has no managed child and is left running.
-fn stop_services_before_exit(app: &AppHandle) {
+/// Longest the launcher waits for the on-exit stop before asking the user what
+/// to do; the stop's own waits are shorter, so this only trips on a true hang.
+const STOP_ON_EXIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// Begin exiting: stop the managed service (when enabled) off the event-loop
+/// thread, then re-issue the exit once it finishes. Running the stop on the async
+/// runtime — rather than blocking the event-loop thread — is what lets the
+/// taskkill, port probes, and waits actually make progress before the process
+/// goes away, which a synchronous block during exit did not.
+fn begin_exit(app: &AppHandle) {
   let state = app.state::<AppState>();
-  tauri::async_runtime::block_on(async {
-    let settings = state.settings.lock().await.clone();
-    if !settings.stop_services_on_exit {
-      return;
+  if state.exit_ready.load(Ordering::SeqCst) {
+    app.exit(0);
+    return;
+  }
+  let app = app.clone();
+  tauri::async_runtime::spawn(async move {
+    if stop_services_before_exit(&app).await {
+      app.state::<AppState>().exit_ready.store(true, Ordering::SeqCst);
+      app.exit(0);
     }
-    let mut manager = state.manager.lock().await;
-    if manager.pid.is_some() || manager.child.is_some() {
-      let _ = stop_dsh_web(&mut manager, &settings).await;
-    }
+    // Otherwise the user declined to exit after a failed stop; stay running.
   });
+}
+
+/// Stop the running dsh service the way the UI's Stop button does, with a timeout
+/// so the exit cannot hang. Returns whether the exit should proceed: true when
+/// nothing was running or the stop succeeded; on a failed or timed-out stop the
+/// user is asked whether to exit anyway (the service may still be running).
+async fn stop_services_before_exit(app: &AppHandle) -> bool {
+  let (manager, settings_lock) = {
+    let state = app.state::<AppState>();
+    (state.manager.clone(), state.settings.clone())
+  };
+  let settings = settings_lock.lock().await.clone();
+  if !settings.stop_services_on_exit {
+    return true;
+  }
+  // Mirror the Stop button: act on whatever holds the configured port, whether
+  // this launcher started it (a managed child) or it is running externally —
+  // `stop_dsh_web` terminates the managed tree and/or the port's owner. Gating on
+  // a managed child alone missed a service shown as "external" (e.g. one started
+  // before the launcher, or after a launcher restart), leaving it running on exit.
+  let managed = {
+    let manager = manager.lock().await;
+    manager.pid.is_some() || manager.child.is_some()
+  };
+  let running = managed || process::is_port_open("127.0.0.1", settings.port).await;
+  if !running {
+    return true;
+  }
+  let outcome = {
+    let mut manager = manager.lock().await;
+    tokio::time::timeout(STOP_ON_EXIT_TIMEOUT, stop_dsh_web(&mut manager, &settings)).await
+  };
+  if matches!(outcome, Ok(Ok(()))) {
+    return true;
+  }
+  confirm_exit_after_failed_stop(app, &settings)
+}
+
+/// Ask the user whether to exit after the on-exit stop failed. Returns whether to
+/// proceed with the exit. Shown off the main thread, so `blocking_show` is safe.
+fn confirm_exit_after_failed_stop(app: &AppHandle, settings: &AppSettings) -> bool {
+  use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+  let locale = state::current_locale(settings);
+  app
+    .dialog()
+    .message(state::t_log(&locale, "exit.stop.failed.body", &[]))
+    .title(state::t_log(&locale, "exit.stop.failed.title", &[]))
+    .kind(MessageDialogKind::Warning)
+    .buttons(MessageDialogButtons::OkCancelCustom(
+      state::t_log(&locale, "exit.continue", &[]),
+      state::t_log(&locale, "exit.cancel", &[]),
+    ))
+    .blocking_show()
 }
 
 /// Build the tray icon and verify it actually landed in the notification area.
@@ -309,8 +386,7 @@ fn configure_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         tray.on_menu_event(|app, event| match event.id.as_ref() {
           "toggle" => toggle_main_window(app),
           "quit" => {
-            stop_services_before_exit(app);
-            app.exit(0);
+            begin_exit(app);
           }
           _ => {}
         });
@@ -338,6 +414,13 @@ fn started_at_sign_in() -> bool {
   std::env::args().any(|arg| arg == "--autostart")
 }
 
+/// Whether the launcher was started silently by the sign-in autostart entry, so
+/// the frontend knows not to reveal the window after it paints its first content.
+#[tauri::command]
+fn is_autostart_launch() -> bool {
+  started_at_sign_in()
+}
+
 pub fn run() {
   let manager = ServerManager::new();
   let logs = manager.logs.clone();
@@ -350,6 +433,7 @@ pub fn run() {
       manager: Arc::new(Mutex::new(manager)),
       logs: logs.clone(),
       settings,
+      exit_ready: Arc::new(AtomicBool::new(false)),
     })
     .setup(move |app| {
       let loaded = state::load_settings(app.handle());
@@ -375,16 +459,31 @@ pub fn run() {
       let main_window = app.get_webview_window("main").expect("configured main window");
       #[cfg(target_os = "windows")]
       window::configure(&main_window.as_ref().window())?;
+      // The window stays hidden until the frontend paints its first content and
+      // calls show() itself (see App.tsx), so a non-silent launch never flashes a
+      // blank window while the webview initializes. This is the safety net: if the
+      // frontend never signals (a load failure), reveal the window anyway after a
+      // few seconds so it cannot stay stuck hidden. A silent sign-in launch is
+      // never auto-shown; the tray toggles it.
       if !started_at_sign_in() {
-        main_window.show()?;
+        let handle = app.handle().clone();
+        tauri::async_runtime::spawn(async move {
+          tokio::time::sleep(std::time::Duration::from_secs(8)).await;
+          if let Some(window) = handle.get_webview_window("main") {
+            if !window.is_visible().unwrap_or(true) {
+              let _ = window.show();
+              let _ = window.set_focus();
+            }
+          }
+        });
       }
       Ok(())
     })
     .invoke_handler(tauri::generate_handler![
       get_status, get_settings, set_dsh_directory, set_theme, set_locale, set_autostart, clear_logs,
-      open_directory_picker,
+      open_directory_picker, is_autostart_launch,
       install_deps, build_frontend, start_server, stop_server, restart_server, open_url,
-      set_stop_services_on_exit
+      set_stop_services_on_exit, set_server_port
     ])
     .build(tauri::generate_context!())
     .expect("error building tauri app");
@@ -410,12 +509,16 @@ pub fn run() {
         }
       }
     }
-    // A window closed with no tray to summon it back falls through to exit here;
-    // stop the managed dsh service the same way the Quit menu does so no exit
-    // path orphans it. The tray's Quit item stops the service before calling
-    // `app.exit`, which terminates without reaching this event.
-    tauri::RunEvent::ExitRequested { .. } => {
-      stop_services_before_exit(app);
+    // Stop the managed dsh service before the process goes away, when enabled.
+    // The exit is held (`prevent_exit`) while the stop runs off-thread, then
+    // re-issued; `exit_ready` lets that second exit pass straight through. This
+    // covers the tray Quit item (`app.exit`) and a window closed with no tray.
+    tauri::RunEvent::ExitRequested { api, .. } => {
+      if app.state::<AppState>().exit_ready.load(Ordering::SeqCst) {
+        return;
+      }
+      api.prevent_exit();
+      begin_exit(app);
     }
     _ => {}
   });

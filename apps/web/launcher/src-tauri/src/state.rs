@@ -4,12 +4,24 @@ use std::sync::Arc;
 use tauri::Manager;
 use tokio::sync::Mutex;
 
+/// Port the dsh web service listens on when the user has not chosen another.
+pub const DEFAULT_PORT: u16 = 3080;
+
+fn default_port() -> u16 {
+    DEFAULT_PORT
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
     pub dsh_directory: Option<String>,
     pub theme: String,
     pub locale: String,
+    /// Port the dsh web service is expected to listen on. The launcher watches,
+    /// opens, and stops the server on this port, so a non-default dsh port is
+    /// matched by changing this rather than by hardcoding 3080.
+    #[serde(default = "default_port")]
+    pub port: u16,
     /// Whether the launcher starts at sign-in. The OS autostart entry is the
     /// authoritative source, so this is recomputed from the plugin on every
     /// `get_settings` call. It is serialized to the frontend (so the toggle
@@ -35,6 +47,7 @@ impl Default for AppSettings {
             dsh_directory: None,
             theme: "system".to_string(),
             locale: "zh".to_string(),
+            port: DEFAULT_PORT,
             autostart: false,
             stop_services_on_exit: true,
         }
@@ -183,8 +196,12 @@ pub fn t_log(locale: &str, key: &str, args: &[(&str, &str)]) -> String {
             ("dsh.set.success", "DSH directory updated successfully."),
             ("autostart.enabled", "The launcher will now start silently on sign-in."),
             ("autostart.disabled", "The launcher will no longer start automatically when you sign in."),
-            ("stopOnExit.enabled", "Exiting the launcher will also stop the dsh service it started."),
+            ("stopOnExit.enabled", "Exiting the launcher will also stop the running dsh service."),
             ("stopOnExit.disabled", "The dsh service will keep running after the launcher exits."),
+            ("exit.stop.failed.title", "Could not stop the service on exit"),
+            ("exit.stop.failed.body", "You enabled \"Stop services on exit\", but the dsh service could not be stopped in time. Possible causes: the process is unresponsive, the port is held by another program, or the operation needs elevated privileges. Exit anyway? The service may keep running in the background."),
+            ("exit.continue", "Exit anyway"),
+            ("exit.cancel", "Cancel"),
             ("link.shell", "The launcher runs elevated, so the link was handed to Explorer to open the browser without elevated rights."),
             ("command.start", "Starting command: {command}"),
             ("command.succeeded", "Command succeeded: {command}"),
@@ -208,8 +225,12 @@ pub fn t_log(locale: &str, key: &str, args: &[(&str, &str)]) -> String {
             ("dsh.set.success", "DSH目录设置成功"),
             ("autostart.enabled", "已开启开机自启，登录系统后将自动静默运行"),
             ("autostart.disabled", "已关闭开机自启"),
-            ("stopOnExit.enabled", "已开启退出时停止由本软件启动的 dsh 服务"),
+            ("stopOnExit.enabled", "已开启退出时停止运行中的 dsh 服务"),
             ("stopOnExit.disabled", "已关闭退出时停止服务，退出后 dsh 服务将继续运行"),
+            ("exit.stop.failed.title", "退出时停止服务失败"),
+            ("exit.stop.failed.body", "你开启了「退出时停止服务」，但未能在限定时间内停止 dsh 服务。可能原因：进程无响应、端口被其他程序占用，或操作需要更高权限。是否仍要退出？退出后该服务可能仍在后台运行。"),
+            ("exit.continue", "仍要退出"),
+            ("exit.cancel", "取消"),
             ("link.shell", "启动器以管理员权限运行，已交由资源管理器以普通权限打开浏览器"),
             ("command.start", "开始执行命令：{command}"),
             ("command.succeeded", "命令执行成功：{command}"),

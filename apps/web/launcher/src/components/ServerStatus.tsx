@@ -23,6 +23,10 @@ export function ServerStatus({ status, loading, error, onRetry }: ServerStatusPr
   const { t } = useI18n()
   const directoryMissing = status?.dshDirectoryValid === false
   const failure = error || status?.error || directoryMissing
+  // A connection error or a backend-reported error (other than a missing
+  // directory, which the user must fix) is worth re-polling, so offer retry for
+  // both — not only the hook's connection error.
+  const recoverable = Boolean(error) || Boolean(status?.error && !directoryMissing)
   const state = failure ? 'unavailable' : loading || !status ? 'loading' : status.state
   const label = failure ? t('status.unavailable') : loading || !status ? t('status.loading') : t(stateLabels[status.state])
   const explanation = error
@@ -39,7 +43,7 @@ export function ServerStatus({ status, loading, error, onRetry }: ServerStatusPr
           <span className="service-state-label">{label}</span>
           {failure && (
             <>
-              {error && (
+              {recoverable && (
                 <Button variant="ghost" size="sm" onClick={onRetry} aria-label={t('status.retry')} data-tooltip={t('status.retry')}>
                   <TablerIcon name="refresh" size={12} />
                 </Button>

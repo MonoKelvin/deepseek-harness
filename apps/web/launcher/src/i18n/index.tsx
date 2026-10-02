@@ -11,7 +11,6 @@ const STORAGE_KEY = 'dsh-launcher-locale'
 export interface I18nContextValue {
   locale: Locale
   setLocale: (locale: Locale) => void
-  toggleLocale: () => void
   /** Translate a key, substituting `{name}` placeholders from `params`. */
   t: (key: TranslationKey, params?: Record<string, string | number>) => string
 }
@@ -23,6 +22,16 @@ function readInitialLocale(): Locale {
     return localStorage.getItem(STORAGE_KEY) === 'en' ? 'en' : 'zh'
   } catch {
     return 'zh'
+  }
+}
+
+/** Whether the user has an explicitly chosen locale stored locally, so a
+ * backend-persisted preference does not override a local choice. */
+export function hasStoredLocale(): boolean {
+  try {
+    return localStorage.getItem(STORAGE_KEY) !== null
+  } catch {
+    return false
   }
 }
 
@@ -53,7 +62,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
   )
 
   const value = useMemo<I18nContextValue>(
-    () => ({ locale, setLocale, toggleLocale: () => setLocale(locale === 'zh' ? 'en' : 'zh'), t }),
+    () => ({ locale, setLocale, t }),
     [locale, setLocale, t],
   )
 

@@ -25,6 +25,8 @@ export interface AppSettings {
   dshDirectory: string | null
   theme: string
   locale: string
+  /** Port the dsh web service is expected to listen on. */
+  port: number
   /** Mirrors the OS autostart entry; not stored in the settings file. */
   autostart: boolean
   /** Whether exiting the launcher also stops the dsh service it started. */

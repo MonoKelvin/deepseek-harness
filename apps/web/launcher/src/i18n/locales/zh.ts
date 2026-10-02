@@ -2,7 +2,7 @@
 export const zh = {
   'app.title': 'DSH启动器',
   'app.views': '内容',
-  'app.description': '简介：启动和管理本地 Web 服务。',
+  'app.description': '一款用于启动、停止并监控本地 DeepSeek Harness Web端服务的工具软件。',
   'titlebar.close': '隐藏到托盘',
   'status.title': '本地服务',
   'status.state.stopped': '未启动',
@@ -60,6 +60,9 @@ export const zh = {
   'settings.dshDirectoryPlaceholder': '自动检测',
   'settings.dshDirectoryInvalid': 'DSH 目录未配置或无效',
   'settings.dshDirectoryBrowse': '选择 DSH 目录',
+  'settings.serverPort': '服务端口',
+  'settings.serverPortHint': 'dsh 服务监听的端口',
+  'settings.serverPortLocked': '服务运行中，停止后可修改',
   'settings.version': '版本',
   'settings.openSource': '开源地址',
   'settings.license': 'MIT协议 © MonoStudio',

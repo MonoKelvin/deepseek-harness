@@ -15,7 +15,7 @@
   <img src="https://img.shields.io/badge/Rust-stable-000000?logo=rust&logoColor=white" alt="Rust" />
   <img src="https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black" alt="React 18" />
   <img src="https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white" alt="TypeScript 5" />
-  <img src="https://img.shields.io/badge/版本-0.1.0-blue" alt="版本 0.1.0" />
+  <img src="https://img.shields.io/github/package-json/v/MonoKelvin/deepseek-harness?filename=apps/web/launcher/package.json&label=%E7%89%88%E6%9C%AC" alt="版本" />
   <img src="https://img.shields.io/badge/许可证-MIT-green" alt="许可证：MIT" />
 </p>
 
@@ -31,6 +31,10 @@
 `pnpm dsh web` 启动。**DSH Web 启动器**把它装进一个小小的桌面窗口，让你无需命令行
 就能管理服务、安装依赖、构建前端。
 
+<p align="center">
+  <img src="public/screenshot001.png" alt="DSH Web 启动器界面截图" width="520" />
+</p>
+
 ## ✨ 功能特性
 
 - 🟢 **一键生命周期** —— 主按钮随状态变化（启动 → 打开 → 重启 / 停止）；服务停止时
@@ -39,8 +43,8 @@
   （标注为「外部启动」）。
 - 📜 **合并实时日志** —— 后端、前端与 IPC 消息汇入同一视图，随产生即时显示；警告和错误
   只留在日志里（不弹窗、不 toast），复制与清空位于工具栏。
-- ⚙️ **持久化设置** —— 项目目录、主题、语言、开机自启（默认关闭）、退出时停止服务
-  （默认开启，仅停止由本启动器启动的服务）。
+- ⚙️ **持久化设置** —— 项目目录、服务端口、主题、语言、开机自启（默认关闭）、退出时停止服务
+  （默认开启，退出启动器时停止在配置端口上运行的 dsh 服务）。
 - 🖥️ **系统托盘** —— 关闭窗口会隐藏到托盘，从托盘菜单退出。
 - 🌏 **双语界面** —— 简体中文与 English。
 
@@ -104,6 +108,7 @@ npm run tauri:build  # 编译 release 版本（并生成 Tauri 的 MSI）
 | `npm run package` | 免安装 exe **和** Inno Setup 安装包（Windows） |
 | `npm run test:ui` | Playwright 界面检查 |
 | `npm run clean:port` | 释放被占用的开发端口 `5173` |
+| `npm run icons` | 从母版图重新生成应用图标（需要工作区的 `sharp`） |
 
 ## 📦 打包发布（Windows）
 
@@ -138,7 +143,8 @@ npm run test:ui
 
 ## 💡 说明与常见问题
 
-- **端口** —— `dsh web` 默认监听 `http://127.0.0.1:3080`。
+- **端口** —— `dsh web` 默认监听 `http://127.0.0.1:3080`；若端口不同，在「软件设置 →
+  服务端口」中修改，启动器便会据此监测、打开与停止。
 - **需要 pnpm** —— 服务与依赖操作在 DSH 项目根目录下执行 `pnpm`，因此必须安装 pnpm
   并可通过 `PATH` 找到。
 

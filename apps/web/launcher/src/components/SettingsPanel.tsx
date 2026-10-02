@@ -13,27 +13,45 @@ interface SettingsPanelProps {
   theme: ThemePreference
   settings: AppSettings | null
   dshDirectoryValid?: boolean
+  serverRunning?: boolean
   onThemeChange: (theme: ThemePreference) => void
   onDshDirectoryChange: (path: string) => void
   onBrowseDshDirectory: () => void
+  onServerPortChange: (port: number) => void
   onLocaleChange: (locale: 'zh' | 'en') => void
   onAutostartChange: (enabled: boolean) => void
   onStopServicesOnExitChange: (enabled: boolean) => void
   onOpenProject: () => void
 }
 
-/** Edit persisted settings; directory changes save on blur or Enter. */
+/** Edit persisted settings; directory and port changes save on blur or Enter. */
 export function SettingsPanel({
-  version, theme, settings, dshDirectoryValid,
-  onThemeChange, onDshDirectoryChange, onBrowseDshDirectory, onLocaleChange, onAutostartChange, onStopServicesOnExitChange, onOpenProject,
+  version, theme, settings, dshDirectoryValid, serverRunning,
+  onThemeChange, onDshDirectoryChange, onBrowseDshDirectory, onServerPortChange, onLocaleChange, onAutostartChange, onStopServicesOnExitChange, onOpenProject,
 }: SettingsPanelProps) {
   const { t, locale } = useI18n()
   const [directory, setDirectory] = useState(settings?.dshDirectory ?? '')
+  const [port, setPort] = useState(settings?.port != null ? String(settings.port) : '')
   const directoryInvalid = dshDirectoryValid === false
 
   useEffect(() => {
     setDirectory(settings?.dshDirectory ?? '')
   }, [settings?.dshDirectory])
+
+  useEffect(() => {
+    setPort(settings?.port != null ? String(settings.port) : '')
+  }, [settings?.port])
+
+  // Save a port edit only when it is a valid TCP port and actually changed;
+  // otherwise snap the field back to the persisted value.
+  const commitPort = () => {
+    const parsed = Number(port)
+    if (Number.isInteger(parsed) && parsed >= 1 && parsed <= 65535) {
+      if (parsed !== settings?.port) onServerPortChange(parsed)
+    } else {
+      setPort(settings?.port != null ? String(settings.port) : '')
+    }
+  }
 
   return (
     <section className="settings-panel" aria-label={t('settings.title')}>
@@ -80,6 +98,30 @@ export function SettingsPanel({
             </div>
           </div>
           {directoryInvalid && <p className="setting-error" id="dsh-directory-error">{t('settings.dshDirectoryInvalid')}</p>}
+        </div>
+
+        <div className="setting-row">
+          <div className="setting-label">
+            <label htmlFor="server-port">{t('settings.serverPort')}</label>
+            <p className="setting-caption">{serverRunning ? t('settings.serverPortLocked') : t('settings.serverPortHint')}</p>
+          </div>
+          <div className="setting-control">
+            <input
+              id="server-port"
+              type="number"
+              inputMode="numeric"
+              min={1}
+              max={65535}
+              className="setting-input setting-input-port"
+              value={port}
+              disabled={!settings || serverRunning}
+              onChange={event => setPort(event.target.value)}
+              onBlur={commitPort}
+              onKeyDown={event => {
+                if (event.key === 'Enter') event.currentTarget.blur()
+              }}
+            />
+          </div>
         </div>
 
         <div className="setting-row">

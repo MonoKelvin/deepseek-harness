@@ -1,5 +1,5 @@
 product-name = "dsh-web-launcher"
-version = "0.1.0"
+version = "../package.json"
 identifier = "com.deepseek.harness.web-launcher"
 main-binary-name = "dsh-web-launcher"
 
@@ -15,12 +15,15 @@ with-global-tauri = true
 [[app.windows]]
 url = "index.html"
 label = "main"
-width = 600
-height = 480
-min-width = 600
-min-height = 480
-max-width = 600
-max-height = 480
+# The window is 60px larger than the 600x480 content on each axis: the launcher
+# draws its own rounded corners and drop shadow in CSS (see src/index.css), and
+# this 30px transparent gutter on every side is where that shadow renders.
+width = 660
+height = 540
+min-width = 660
+min-height = 540
+max-width = 660
+max-height = 540
 resizable = false
 fullscreen = false
 maximized = false
@@ -29,13 +32,16 @@ center = true
 skip-taskbar = false
 title = "DSH 启动器"
 decorations = false
-shadow = true
+# No native shadow or rounded corners: a transparent window lets one CSS corner
+# radius look identical on Windows 10 (no native rounding) and Windows 11, and
+# the CSS shadow replaces the lost native one.
+shadow = false
 visible = false
-transparent = false
+transparent = true
 drag-drop-enabled = false
 
 [app.security]
-csp = "default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' http://127.0.0.1:3080"
+csp = "default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'"
 
 [bundle]
 targets = "msi"

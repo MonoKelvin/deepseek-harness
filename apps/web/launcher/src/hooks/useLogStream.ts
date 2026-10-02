@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import type { LogEntry } from '../types/server-status'
-
-const MAX_ENTRIES = 200
+import { MAX_LOG_ENTRIES } from '../lib/constants'
 
 /** Event the launcher backend emits for each appended log entry. */
 export const LOG_ENTRY_EVENT = 'log-entry'
@@ -11,12 +10,25 @@ export const LOG_ENTRY_EVENT = 'log-entry'
  * Merge entries by their monotonic IDs. A status snapshot and a live event can
  * carry the same entry, and an event can arrive before the snapshot that
  * contains it, so unioning by ID keeps the order stable either way.
+ *
+ * When nothing in `incoming` is new or changed — the common case for a status
+ * poll that re-sends the same buffer — the current array is returned unchanged
+ * so React can skip the re-render.
  */
 function merge(current: LogEntry[], incoming: LogEntry[]): LogEntry[] {
   if (!incoming.length) return current
   const byId = new Map(current.map(entry => [entry.id, entry]))
-  for (const entry of incoming) byId.set(entry.id, entry)
-  return [...byId.values()].sort((left, right) => left.id - right.id).slice(-MAX_ENTRIES)
+  let changed = false
+  for (const entry of incoming) {
+    const existing = byId.get(entry.id)
+    if (!existing || existing.message !== entry.message || existing.severity !== entry.severity
+      || existing.timestamp !== entry.timestamp || existing.source !== entry.source) {
+      changed = true
+    }
+    byId.set(entry.id, entry)
+  }
+  if (!changed) return current
+  return [...byId.values()].sort((left, right) => left.id - right.id).slice(-MAX_LOG_ENTRIES)
 }
 
 export interface LogStream {

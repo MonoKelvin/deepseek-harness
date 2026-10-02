@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type PointerEvent } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { getVersion } from '@tauri-apps/api/app'
 import { homepage } from '../package.json'
@@ -13,12 +13,14 @@ import { Button } from '@/components/ui/button'
 import { useServerStatus } from './hooks/useServerStatus'
 import { useLogStream } from './hooks/useLogStream'
 import { useTheme, hasStoredTheme } from './hooks/useTheme'
-import { useI18n, type TranslationKey } from './i18n'
+import { useI18n, hasStoredLocale, type TranslationKey } from './i18n'
+import { MAX_LOG_ENTRIES } from './lib/constants'
 import {
   installDeps, buildFrontend, startServer, stopServer, restartServer, openUrl,
-  getSettings, setDshDirectory, clearLogs, setTheme, setLocale, setAutostart, setStopServicesOnExit, openDirectoryPicker,
+  getSettings, setDshDirectory, clearLogs, setTheme, setLocale, setAutostart, setStopServicesOnExit, setServerPort, openDirectoryPicker,
   type CommandOutput, type AppSettings,
 } from './lib/tauri-api'
+import { revealWindowOnce } from './lib/reveal-window'
 import type { LogEntry } from './types/server-status'
 
 interface UiError {
@@ -43,7 +45,7 @@ const COPY_FEEDBACK_MS = 2000
 function App() {
   const { t, locale, setLocale: setLocalePreference } = useI18n()
   const { theme, setTheme: setThemePreference } = useTheme()
-  const { status, loading, refresh, error: statusError } = useServerStatus(2000)
+  const { status, loading, refresh, error: statusError } = useServerStatus()
   const logStream = useLogStream(status?.logEntries)
   const commandPending = useRef(false)
   const [activeCommand, setActiveCommand] = useState<LauncherCommand | null>(null)
@@ -59,16 +61,33 @@ function App() {
   const reportError = useCallback((action: TranslationKey, error: unknown) => {
     // Negative IDs keep IPC-independent errors distinct from backend entries.
     const entry = { id: nextErrorId.current--, timestamp: new Date().toISOString(), action, detail: errorMessage(error) }
-    setUiErrors(previous => [...previous.slice(-199), entry])
+    setUiErrors(previous => [...previous.slice(-(MAX_LOG_ENTRIES - 1)), entry])
   }, [])
 
   useEffect(() => () => {
     if (copyTimer.current !== null) window.clearTimeout(copyTimer.current)
   }, [])
 
+  // Keep the document language in sync with the UI locale so assistive tech sees
+  // the right language above the app subtree, not the static value in index.html.
+  useEffect(() => {
+    document.documentElement.lang = locale === 'zh' ? 'zh-CN' : 'en'
+  }, [locale])
+
   useEffect(() => {
     if (statusError) reportError('status.title', statusError)
   }, [statusError, reportError])
+
+  // Reveal the window the instant the shell is committed to the DOM, so a
+  // non-silent launch appears with content instead of a blank window while the
+  // webview initializes. useLayoutEffect runs right after commit, before paint,
+  // which is the earliest point the DOM is ready to composite; the silent-launch
+  // check it awaits was started at module load, so it adds nothing on the path.
+  // The backend keeps the window hidden until this runs and reveals it itself
+  // after a timeout as a fallback.
+  useLayoutEffect(() => {
+    void revealWindowOnce()
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -78,17 +97,26 @@ function App() {
       if (!cancelled) reportError('settings.version', error)
     })
     void getSettings().then((result) => {
-      if (!cancelled) {
-        setSettings(result)
-        if (result.theme && !hasStoredTheme()) setThemePreference(result.theme as 'light' | 'dark' | 'system')
+      if (cancelled) return
+      setSettings(result)
+      // Seed theme and locale from the backend only when the user has no local
+      // choice, mirroring the OS-vs-file precedence; validate before applying so
+      // an unexpected persisted value cannot become an invalid preference.
+      if (!hasStoredTheme() && (result.theme === 'light' || result.theme === 'dark' || result.theme === 'system')) {
+        setThemePreference(result.theme)
+      }
+      if (!hasStoredLocale() && (result.locale === 'zh' || result.locale === 'en')) {
+        setLocalePreference(result.locale)
       }
     }).catch((error) => {
       if (!cancelled) reportError('settings.title', error)
     })
     return () => { cancelled = true }
-  }, [reportError, setThemePreference])
+  }, [reportError, setThemePreference, setLocalePreference])
 
-  const logEntries: LogEntry[] = [
+  // Rebuilt only when the backing entries or language change, not on every
+  // 2-second status poll, which re-renders App with an unchanged log set.
+  const logEntries = useMemo<LogEntry[]>(() => [
     ...logStream.entries,
     ...uiErrors.map<LogEntry>(entry => ({
       id: entry.id,
@@ -100,7 +128,7 @@ function App() {
         error: entry.detail.includes('state not managed') ? t('status.stateNotManaged') : entry.detail,
       }),
     })),
-  ].sort((left, right) => left.timestamp.replace('T', ' ').localeCompare(right.timestamp.replace('T', ' '))).slice(-200)
+  ].sort((left, right) => left.timestamp.replace('T', ' ').localeCompare(right.timestamp.replace('T', ' '))).slice(-MAX_LOG_ENTRIES), [logStream.entries, uiErrors, t])
 
   const runCommand = async (name: LauncherCommand, command: () => Promise<CommandOutput>) => {
     if (commandPending.current) return
@@ -145,6 +173,7 @@ function App() {
   const unavailable = loading || !status || Boolean(statusError || status.error)
   const onCommand = (name: LauncherCommand) => void runCommand(name, commands[name])
   const dshDirectoryValid = status?.dshDirectoryValid ?? false
+  const serverRunning = status?.state === 'running-managed' || status?.state === 'running-external'
 
   const handleThemeChange = (next: 'light' | 'dark' | 'system') => {
     setThemePreference(next)
@@ -171,11 +200,21 @@ function App() {
   const handleStopServicesOnExitChange = (enabled: boolean) => {
     void setStopServicesOnExit(enabled).then(setSettings).catch(error => reportError('settings.stopOnExit', error))
   }
+  const handleServerPortChange = (port: number) => {
+    void setServerPort(port).then(setSettings).catch(error => reportError('settings.serverPort', error))
+  }
   const handleClearLogs = () => {
     void clearLogs().then(() => {
       logStream.clear()
       setUiErrors([])
       setCommandSuccess(null)
+      // Clearing during the copy-feedback window would otherwise leave the copy
+      // button stuck disabled until the timer fires.
+      if (copyTimer.current !== null) {
+        window.clearTimeout(copyTimer.current)
+        copyTimer.current = null
+      }
+      setCopied(false)
       refresh()
     }).catch(error => reportError('log.clear', error))
   }
@@ -271,9 +310,11 @@ function App() {
               theme={theme}
               settings={settings}
               dshDirectoryValid={status?.dshDirectoryValid}
+              serverRunning={serverRunning}
               onThemeChange={handleThemeChange}
               onDshDirectoryChange={handleDshDirectoryChange}
               onBrowseDshDirectory={handleBrowseDshDirectory}
+              onServerPortChange={handleServerPortChange}
               onLocaleChange={handleLocaleChange}
               onAutostartChange={handleAutostartChange}
               onStopServicesOnExitChange={handleStopServicesOnExitChange}

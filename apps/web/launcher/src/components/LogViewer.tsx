@@ -26,6 +26,7 @@ export function LogViewer({ entries, activeLabel }: LogViewerProps) {
         ref={body}
         className="log-body"
         tabIndex={0}
+        role="log"
         aria-label={t('log.title')}
         onScroll={(event) => {
           const node = event.currentTarget

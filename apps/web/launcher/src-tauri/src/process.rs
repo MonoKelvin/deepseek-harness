@@ -49,7 +49,6 @@ pub struct CommandOutput {
   pub stderr: String,
 }
 
-const DEFAULT_PORT: u16 = 3080;
 const DEFAULT_HOST: &str = "127.0.0.1";
 const MAX_LOG_ENTRIES: usize = 200;
 /// Grace period for a terminated process tree to release the port before the
@@ -206,25 +205,40 @@ impl ServerManager {
 /// Shared app state injected via Tauri's managed state system.
 pub type SharedManager = Arc<Mutex<ServerManager>>;
 
+/// Reap a managed child that exited on its own, clearing its handle, PID, and
+/// log task so a dead process is not reported as still running. Returns whether
+/// a managed child is still alive afterwards.
+fn reap_if_exited(manager: &mut ServerManager) -> bool {
+  let Some(child) = manager.child.as_mut() else { return false };
+  match child.try_wait() {
+    Ok(Some(_status)) => {
+      if let Some(handle) = manager.log_handle.take() {
+        handle.abort();
+      }
+      manager.child = None;
+      manager.pid = None;
+      false
+    }
+    // Still running, or the status could not be read — assume alive rather than
+    // risk spawning a second tree over a live one.
+    Ok(None) | Err(_) => true,
+  }
+}
+
 /// Resolve the DSH root from the user-configured directory or auto-detection.
 pub fn repo_root_from_settings(settings: &AppSettings) -> String {
   if let Some(path) = resolve_dsh_root(settings) {
     return path;
   }
-  // In dev mode, the binary lives in target/debug/ — fall back to CWD
-  // which is the workspace root when running `tauri dev`.
-  let exe = std::env::current_exe().ok();
-  if let Some(exe) = exe {
-    let fallback = PathBuf::from(".");
-    let launcher_dir = exe.parent().unwrap_or(&fallback);
-    let web_dir = launcher_dir.parent().unwrap_or(launcher_dir);
-    let apps_dir = web_dir.parent().unwrap_or(web_dir);
-    let root = apps_dir.parent().unwrap_or(apps_dir);
-    let root = root.to_string_lossy().to_string();
-    if std::path::Path::new(&root).join("pnpm-workspace.yaml").exists()
-      || std::path::Path::new(&root).join("Cargo.toml").exists()
-    {
-      return root;
+  // Nothing configured or detected: search the binary's and the working
+  // directory's ancestors for the workspace marker (`pnpm-workspace.yaml`),
+  // which identifies the DSH root when running from source via `tauri dev`.
+  let starts = [std::env::current_exe().ok(), std::env::current_dir().ok()];
+  for start in starts.into_iter().flatten() {
+    for ancestor in start.ancestors() {
+      if ancestor.join("pnpm-workspace.yaml").exists() {
+        return ancestor.to_string_lossy().to_string();
+      }
     }
   }
   std::env::current_dir()
@@ -402,6 +416,14 @@ pub async fn run_pnpm(args: &[&str], logs: &SharedLogBuffer, settings: &crate::s
 /// Spawn `pnpm dsh web` and drain both output pipes concurrently.
 pub async fn start_dsh_web(manager: &mut ServerManager, settings: &crate::state::AppSettings) -> Result<u32, String> {
   let locale = crate::state::current_locale(settings);
+  // A managed server already running must not be overwritten: tokio does not
+  // kill a `Child` on drop, so replacing the handle would orphan the previous
+  // process tree and leak its log task. Reap first in case it exited on its own.
+  if reap_if_exited(manager) {
+    if let Some(pid) = manager.pid {
+      return Ok(pid);
+    }
+  }
   append_log(&manager.logs, LogSource::Launcher, LogSeverity::Info, crate::state::t_log(&locale, "command.start", &[("command", "pnpm dsh web")])).await;
   let mut pnpm = match pnpm_command(&locale) {
     Ok(pnpm) => pnpm,
@@ -487,6 +509,7 @@ async fn terminate_listener(pid: u32) -> io::Result<()> {
 /// it is the only remaining handle on the process holding the port.
 pub async fn stop_dsh_web(manager: &mut ServerManager, settings: &crate::state::AppSettings) -> Result<(), String> {
   let locale = crate::state::current_locale(settings);
+  let port = settings.port;
   // Take the descendants down first: terminating the direct child orphans them.
   #[cfg(target_os = "windows")]
   {
@@ -497,12 +520,20 @@ pub async fn stop_dsh_web(manager: &mut ServerManager, settings: &crate::state::
         return Err(error);
       }
     }
+    // The tree kill above already terminated the direct child, so only reap it
+    // (a second `kill` on an exited child can report a spurious failure).
+    if let Some(child) = manager.child.as_mut() {
+      let _ = child.wait().await;
+    }
   }
-  if let Some(child) = manager.child.as_mut() {
-    if let Err(error) = child.kill().await {
-      let error = format!("Failed to stop dsh web: {error}");
-      log_command_result(&manager.logs, &locale, "stop", Err(&error)).await;
-      return Err(error);
+  #[cfg(not(target_os = "windows"))]
+  {
+    if let Some(child) = manager.child.as_mut() {
+      if let Err(error) = child.kill().await {
+        let error = format!("Failed to stop dsh web: {error}");
+        log_command_result(&manager.logs, &locale, "stop", Err(&error)).await;
+        return Err(error);
+      }
     }
   }
   if let Some(handle) = manager.log_handle.take() {
@@ -511,8 +542,8 @@ pub async fn stop_dsh_web(manager: &mut ServerManager, settings: &crate::state::
   }
   manager.child = None;
   manager.pid = None;
-  if !await_port_released(PORT_RELEASE_GRACE).await {
-    let stopped = match stop_port_owner(&manager.logs, &locale).await {
+  if !await_port_released(port, PORT_RELEASE_GRACE).await {
+    let stopped = match stop_port_owner(&manager.logs, &locale, port).await {
       Ok(stopped) => stopped,
       Err(error) => {
         let error = format!("Failed to stop dsh web: {error}");
@@ -524,15 +555,15 @@ pub async fn stop_dsh_web(manager: &mut ServerManager, settings: &crate::state::
     // cannot still see the stopped server as running. A port that accepts
     // connections with no listed owner is a different failure from one whose
     // owner kept the socket, and only the second has an actionable cause.
-    if !await_port_released(PORT_RELEASE_TIMEOUT).await {
+    if !await_port_released(port, PORT_RELEASE_TIMEOUT).await {
       let key = if stopped.is_empty() { "process.owner.missing" } else { "process.port.held" };
-      let error = crate::state::t_log(&locale, key, &[("port", &DEFAULT_PORT.to_string())]);
+      let error = crate::state::t_log(&locale, key, &[("port", &port.to_string())]);
       // What still holds the port separates a port taken over from a terminate
       // that did not take effect, which the failure alone cannot.
-      let remaining = listening_owners(DEFAULT_PORT).await.unwrap_or_default();
+      let remaining = listening_owners(port).await.unwrap_or_default();
       if !remaining.is_empty() {
         let pids = remaining.iter().map(u32::to_string).collect::<Vec<_>>().join(", ");
-        append_log(&manager.logs, LogSource::Launcher, LogSeverity::Warn, crate::state::t_log(&locale, "process.port.listeners", &[("port", &DEFAULT_PORT.to_string()), ("pids", &pids)])).await;
+        append_log(&manager.logs, LogSource::Launcher, LogSeverity::Warn, crate::state::t_log(&locale, "process.port.listeners", &[("port", &port.to_string()), ("pids", &pids)])).await;
       }
       log_command_result(&manager.logs, &locale, "stop", Err(&error)).await;
       return Err(error);
@@ -542,12 +573,12 @@ pub async fn stop_dsh_web(manager: &mut ServerManager, settings: &crate::state::
   Ok(())
 }
 
-/// Wait out `timeout` for the stopped server to release the port, so a following
+/// Wait out `timeout` for the stopped server to release `port`, so a following
 /// start does not race the socket it still holds. Returns whether it was released.
-async fn await_port_released(timeout: Duration) -> bool {
+async fn await_port_released(port: u16, timeout: Duration) -> bool {
   let deadline = Instant::now() + timeout;
   loop {
-    if !is_port_open(DEFAULT_HOST, DEFAULT_PORT).await {
+    if !is_port_open(DEFAULT_HOST, port).await {
       return true;
     }
     if Instant::now() >= deadline {
@@ -621,26 +652,26 @@ async fn terminate_port_listener(logs: &SharedLogBuffer, locale: &str, port: u16
   Ok(owners)
 }
 
-/// Terminate whatever holds `DEFAULT_PORT`, re-resolving the owner after each round.
+/// Terminate whatever holds `port`, re-resolving the owner after each round.
 ///
 /// One round is not always enough. The process `netstat` attributes a port to can
 /// change between rounds — a shell shim hands the listening socket to a surviving
 /// child, a supervisor restarts the server — and each round can only terminate what
 /// owns the port at that moment. Returns the PIDs that were asked to stop, in order.
-async fn stop_port_owner(logs: &SharedLogBuffer, locale: &str) -> io::Result<Vec<u32>> {
+async fn stop_port_owner(logs: &SharedLogBuffer, locale: &str, port: u16) -> io::Result<Vec<u32>> {
   let mut stopped = Vec::new();
   for _ in 0..PORT_OWNER_ROUNDS {
-    if !is_port_open(DEFAULT_HOST, DEFAULT_PORT).await {
+    if !is_port_open(DEFAULT_HOST, port).await {
       break;
     }
-    let round = terminate_port_listener(logs, locale, DEFAULT_PORT).await?;
+    let round = terminate_port_listener(logs, locale, port).await?;
     if round.is_empty() {
       // The port accepts connections but nothing is attributed to it, so another
       // round cannot terminate anything either.
       break;
     }
     stopped.extend(round);
-    if await_port_released(PORT_RELEASE_GRACE).await {
+    if await_port_released(port, PORT_RELEASE_GRACE).await {
       break;
     }
   }
@@ -648,12 +679,15 @@ async fn stop_port_owner(logs: &SharedLogBuffer, locale: &str) -> io::Result<Vec
 }
 
 /// Release the process lock before collecting logs and probing the port.
-pub async fn build_status(shared: &SharedManager, dsh_directory_valid: bool) -> ServerStatusInfo {
+pub async fn build_status(shared: &SharedManager, dsh_directory_valid: bool, port: u16) -> ServerStatusInfo {
   let (managed_alive, managed_pid, logs) = {
-    let manager = shared.lock().await;
-    (manager.child.is_some(), manager.pid, manager.logs.clone())
+    let mut manager = shared.lock().await;
+    // Reap a server that exited on its own so a dead child is not reported as
+    // running with a stale PID.
+    let alive = reap_if_exited(&mut manager);
+    (alive, manager.pid, manager.logs.clone())
   };
-  let port_open = is_port_open(DEFAULT_HOST, DEFAULT_PORT).await;
+  let port_open = is_port_open(DEFAULT_HOST, port).await;
   let (state, external, pid) = if managed_alive {
     (ServerState::RunningManaged, false, managed_pid)
   } else if port_open {
@@ -662,12 +696,12 @@ pub async fn build_status(shared: &SharedManager, dsh_directory_valid: bool) -> 
     (ServerState::Stopped, false, None)
   };
   let url = if state != ServerState::Stopped {
-    Some(format!("http://{DEFAULT_HOST}:{DEFAULT_PORT}/"))
+    Some(format!("http://{DEFAULT_HOST}:{port}/"))
   } else {
     None
   };
   ServerStatusInfo {
-    state, port: Some(DEFAULT_PORT), url, pid, external,
+    state, port: Some(port), url, pid, external,
     dsh_directory_valid,
     log_entries: log_entries(&logs).await,
     error: None,

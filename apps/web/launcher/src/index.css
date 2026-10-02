@@ -21,6 +21,7 @@
     --tooltip: 255 255 255;
     --tooltip-foreground: 44 52 66;
     --art-opacity: 0.18;
+    --shadow: 0 2px 8px rgb(0 0 0 / 0.16), 0 6px 20px rgb(0 0 0 / 0.22);
     --radius: 0.75rem;
     font-family: theme('fontFamily.sans');
     font-synthesis: none;
@@ -44,6 +45,9 @@
     --tooltip: 53 59 70;
     --tooltip-foreground: 241 244 250;
     --art-opacity: 0.085;
+    /* Deeper in dark mode so the shadow stays visible against the dark window
+       and desktop. */
+    --shadow: 0 2px 8px rgb(0 0 0 / 0.26), 0 6px 20px rgb(0 0 0 / 0.40);
   }
 
   * {
@@ -54,12 +58,15 @@
   }
 
   html, body, #root { width: 100%; height: 100%; margin: 0; }
+  /* The window is transparent and 30px larger than the content on every side;
+     this padding is the gutter the launcher's drop shadow renders into. */
+  #root { padding: 30px; }
   body { overflow: hidden; background: transparent; color: rgb(var(--foreground)); font-size: 14px; line-height: 1.5; }
   button { -webkit-tap-highlight-color: transparent; }
   :focus-visible { outline: 2px solid rgb(var(--primary)); outline-offset: 2px; }
 }
 
-.launcher { display: flex; flex-direction: column; height: 100dvh; overflow: hidden; background: rgb(var(--window)); }
+.launcher { display: flex; flex-direction: column; height: 100%; overflow: hidden; background: rgb(var(--window)); box-shadow: var(--shadow); }
 .titlebar { display: flex; flex-shrink: 0; align-items: center; justify-content: space-between; padding: 9px 14px 9px 24px; font-size: 12px; color: rgb(var(--muted-foreground)); user-select: none; }
 .titlebar-identity { display: flex; align-items: center; align-self: stretch; flex: 1; gap: 8px; }
 .titlebar-identity > span { display: inline-flex; align-items: center; line-height: 20px; }
@@ -115,7 +122,7 @@
 .details-panel { display: flex; flex: 1; flex-direction: column; min-height: 0; overflow: hidden; border-radius: 16px; background: rgb(var(--background)); }
 .details-toolbar { display: flex; flex-shrink: 0; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 14px; }
 .panel-tabs { display: flex; width: fit-content; gap: 2px; padding: 3px; border-radius: 9px; background: rgb(var(--muted)); }
-.panel-tabs button, .compact-choice > button { height: 26px; padding: 0 7px; }
+.panel-tabs button, .compact-choice > button { height: 26px; padding: 0 7px; border-radius: 7px; }
 .log-result { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: rgb(var(--muted-foreground)); white-space: nowrap; }
 .log-result[data-failed='true'] { color: rgb(var(--destructive)); }
 .copy-button { position: relative; }
@@ -164,6 +171,11 @@
 .setting-input { width: 100%; min-width: 0; height: 32px; padding: 4px 36px 4px 10px; border: 1px solid rgb(var(--border)); border-radius: 6px; background: rgb(var(--background) / 0.5); font-family: theme('fontFamily.mono'); font-size: 12px; text-align: left; color: rgb(var(--foreground)); }
 .setting-input:focus-visible { outline: 2px solid rgb(var(--primary)); outline-offset: 1px; }
 .setting-input[data-invalid='true'] { border-color: rgb(var(--destructive)); }
+.setting-input:disabled { opacity: 0.55; cursor: not-allowed; }
+/* Compact port field: narrow, right-aligned, and without the 36px right padding
+   the directory field reserves for its browse button (which pushed the native
+   number spinner far from the right edge). */
+.setting-input-port { width: 6rem; padding-right: 8px; text-align: right; }
 .setting-browse-btn { position: absolute; right: 3px; top: 50%; transform: translateY(-50%); width: 26px; height: 26px; padding: 0; }
 .setting-error { grid-column: 1 / -1; margin: 0; text-align: right; font-size: 11px; color: rgb(var(--destructive)); }
 .compact-choice { position: relative; display: inline-flex; gap: 2px; padding: 3px; border-radius: 9px; background: rgb(var(--muted)); }
