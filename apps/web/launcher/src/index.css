@@ -186,7 +186,7 @@
 .settings-open-source { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .settings-open-source-title { font-size: 13px; font-weight: 500; color: rgb(var(--foreground)); }
 .settings-open-source-subtitle { font-size: 11px; line-height: 1.4; color: rgb(var(--muted-foreground)); }
-.settings-source-link { margin-left: auto; color: rgb(var(--muted-foreground)); text-decoration-line: underline; text-underline-offset: 1px; text-decoration-thickness: 1px; white-space: nowrap; }
+.settings-source-link { margin-left: auto; display: inline-flex; align-items: center; gap: 2px; color: rgb(var(--muted-foreground)); text-decoration-line: underline; text-underline-offset: 1px; text-decoration-thickness: 1px; white-space: nowrap; }
 .settings-source-link:hover { color: rgb(var(--foreground)); }
 
 .launcher-tooltip {
