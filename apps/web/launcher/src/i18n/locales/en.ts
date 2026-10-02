@@ -54,6 +54,8 @@ export const en: Record<keyof typeof zh, string> = {
   'settings.language.en': 'English',
   'settings.autostart': 'Launch at startup',
   'settings.autostartHint': 'Auto-run the app silently on startup',
+  'settings.stopOnExit': 'Stop on exit',
+  'settings.stopOnExitHint': 'Stop the service when the app exits',
   'settings.dshDirectory': 'DSH directory',
   'settings.dshDirectoryHint': 'Project root',
   'settings.dshDirectoryPlaceholder': 'Auto-detect',

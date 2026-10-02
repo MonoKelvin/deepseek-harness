@@ -16,7 +16,7 @@ import { useTheme, hasStoredTheme } from './hooks/useTheme'
 import { useI18n, type TranslationKey } from './i18n'
 import {
   installDeps, buildFrontend, startServer, stopServer, restartServer, openUrl,
-  getSettings, setDshDirectory, clearLogs, setTheme, setLocale, setAutostart, openDirectoryPicker,
+  getSettings, setDshDirectory, clearLogs, setTheme, setLocale, setAutostart, setStopServicesOnExit, openDirectoryPicker,
   type CommandOutput, type AppSettings,
 } from './lib/tauri-api'
 import type { LogEntry } from './types/server-status'
@@ -168,6 +168,9 @@ function App() {
   const handleAutostartChange = (enabled: boolean) => {
     void setAutostart(enabled).then(setSettings).catch(error => reportError('settings.autostart', error))
   }
+  const handleStopServicesOnExitChange = (enabled: boolean) => {
+    void setStopServicesOnExit(enabled).then(setSettings).catch(error => reportError('settings.stopOnExit', error))
+  }
   const handleClearLogs = () => {
     void clearLogs().then(() => {
       logStream.clear()
@@ -211,7 +214,6 @@ function App() {
       <header className="titlebar" data-tauri-drag-region>
         <div className="titlebar-identity" data-tauri-drag-region>
           <span className="wordmark" data-tauri-drag-region>{t('app.title')}</span>
-          {version && <span className="app-version" data-tauri-drag-region>v{version}</span>}
         </div>
         <Button variant="ghost" size="icon" onClick={() => void hideWindow()} data-tooltip={t('titlebar.close')} aria-label={t('titlebar.close')}>
           <TablerIcon name="x" size={16} />
@@ -274,6 +276,7 @@ function App() {
               onBrowseDshDirectory={handleBrowseDshDirectory}
               onLocaleChange={handleLocaleChange}
               onAutostartChange={handleAutostartChange}
+              onStopServicesOnExitChange={handleStopServicesOnExitChange}
               onOpenProject={() => onCommand('project')}
             />}
         </section>

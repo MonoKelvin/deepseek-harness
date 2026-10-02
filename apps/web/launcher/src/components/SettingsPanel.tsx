@@ -18,13 +18,14 @@ interface SettingsPanelProps {
   onBrowseDshDirectory: () => void
   onLocaleChange: (locale: 'zh' | 'en') => void
   onAutostartChange: (enabled: boolean) => void
+  onStopServicesOnExitChange: (enabled: boolean) => void
   onOpenProject: () => void
 }
 
 /** Edit persisted settings; directory changes save on blur or Enter. */
 export function SettingsPanel({
   version, theme, settings, dshDirectoryValid,
-  onThemeChange, onDshDirectoryChange, onBrowseDshDirectory, onLocaleChange, onAutostartChange, onOpenProject,
+  onThemeChange, onDshDirectoryChange, onBrowseDshDirectory, onLocaleChange, onAutostartChange, onStopServicesOnExitChange, onOpenProject,
 }: SettingsPanelProps) {
   const { t, locale } = useI18n()
   const [directory, setDirectory] = useState(settings?.dshDirectory ?? '')
@@ -129,6 +130,21 @@ export function SettingsPanel({
               checked={settings?.autostart ?? false}
               disabled={!settings}
               onChange={onAutostartChange}
+            />
+          </div>
+        </div>
+
+        <div className="setting-row">
+          <div className="setting-label">
+            <span>{t('settings.stopOnExit')}</span>
+            <p className="setting-caption">{t('settings.stopOnExitHint')}</p>
+          </div>
+          <div className="setting-control">
+            <Switch
+              ariaLabel={t('settings.stopOnExit')}
+              checked={settings?.stopServicesOnExit ?? true}
+              disabled={!settings}
+              onChange={onStopServicesOnExitChange}
             />
           </div>
         </div>

@@ -30,7 +30,7 @@ async function pageFor(t, fixture = {}, viewport = { width: 560, height: 420 }) 
       calls: [],
       status: { state: 'stopped', port: 3080, url: null, pid: null, external: false, logEntries: [], error: null, ...fixture.status },
       statusError: fixture.statusError, hold: fixture.hold, reject: fixture.reject,
-      settings: { dshDirectory: 'C:\\code\\deepseek-harness', theme: 'system', locale: 'zh', autostart: false, ...fixture.settings },
+      settings: { dshDirectory: 'C:\\code\\deepseek-harness', theme: 'system', locale: 'zh', autostart: false, stopServicesOnExit: true, ...fixture.settings },
       failures: fixture.failures ?? {},
       pickedDirectory: fixture.pickedDirectory ?? null,
       directoryValid: fixture.directoryValid ?? true,
@@ -95,6 +95,10 @@ async function pageFor(t, fixture = {}, viewport = { width: 560, height: 420 }) 
           data.settings.autostart = args.enabled
           return structuredClone(data.settings)
         }
+        if (command === 'set_stop_services_on_exit') {
+          data.settings.stopServicesOnExit = args.enabled
+          return structuredClone(data.settings)
+        }
         if (command === 'get_status') {
           if (data.statusError) throw new Error(data.statusError)
           const status = structuredClone(data.status)
@@ -114,7 +118,7 @@ async function pageFor(t, fixture = {}, viewport = { width: 560, height: 420 }) 
   }, { fixture, version: metadata.version })
   await page.goto(url)
   await page.locator('.service-state:not([data-state="loading"])').waitFor()
-  await page.locator('.app-version').waitFor()
+  await page.locator('.wordmark').waitFor()
   await page.locator('.launcher-art').evaluate((image) => image.decode())
   return page
 }
@@ -136,7 +140,7 @@ async function nextPoll(page) {
   await page.waitForFunction((count) => window.fixture.calls.filter((call) => call.command === 'get_status').length > count, count)
 }
 
-test('compact actions, rotated rounded icon, blur, and version', async (t) => {
+test('compact actions, rotated rounded icon, and blur', async (t) => {
   const page = await pageFor(t)
   const start = page.getByRole('button', { name: '启动服务', exact: true })
   const icon = start.locator('svg.tabler-icon-bleach')
@@ -146,7 +150,6 @@ test('compact actions, rotated rounded icon, blur, and version', async (t) => {
   assert.equal(await start.evaluate((node) => getComputedStyle(node).fontSize), '14px')
   assert.match(await start.evaluate((node) => getComputedStyle(node).backdropFilter), /blur/)
   assert.match(await page.locator('.service-state').evaluate((node) => getComputedStyle(node).backdropFilter), /blur/)
-  assert.equal(await page.locator('.app-version').innerText(), `v${metadata.version}`)
   assert.equal(await page.locator('.titlebar button').count(), 1)
   assert.equal(await page.locator('button.start-button').count(), 1)
   assert.equal(await page.locator('[title]').count(), 0)
@@ -329,7 +332,7 @@ test('autostart switch follows language, defaults off, and reports its change', 
   await page.getByRole('button', { name: '软件设置', exact: true }).click()
   assert.deepEqual(
     await page.locator('.setting-label > span, .setting-label > label').evaluateAll(labels => labels.map(label => label.textContent)),
-    ['DSH目录', '外观', '语言', '开机自启'],
+    ['DSH目录', '外观', '语言', '开机自启', '退出时停止服务'],
   )
   const toggle = page.getByRole('switch', { name: '开机自启', exact: true })
   assert.equal(await toggle.getAttribute('aria-checked'), 'false')
@@ -338,6 +341,17 @@ test('autostart switch follows language, defaults off, and reports its change', 
   await page.waitForFunction(() => window.fixture.settings.autostart === true)
   assert.equal(await toggle.getAttribute('aria-checked'), 'true')
   assert.deepEqual((await callsFor(page, 'set_autostart')).at(-1).args, { enabled: true })
+})
+
+test('stop-on-exit switch defaults on and reports its change', async (t) => {
+  const page = await pageFor(t)
+  await page.getByRole('button', { name: '软件设置', exact: true }).click()
+  const toggle = page.getByRole('switch', { name: '退出时停止服务', exact: true })
+  assert.equal(await toggle.getAttribute('aria-checked'), 'true')
+  await toggle.click()
+  await page.waitForFunction(() => window.fixture.settings.stopServicesOnExit === false)
+  assert.equal(await toggle.getAttribute('aria-checked'), 'false')
+  assert.deepEqual((await callsFor(page, 'set_stop_services_on_exit')).at(-1).args, { enabled: false })
 })
 
 for (const locale of ['zh', 'en']) {
@@ -410,8 +424,8 @@ for (const locale of ['zh', 'en']) {
     const page = await pageFor(t, { locale, settings: { dshDirectory: longPath } })
     await page.getByRole('button', { name: locale === 'zh' ? '软件设置' : 'Settings', exact: true }).click()
     assert.deepEqual(await page.locator('.setting-label').evaluateAll(labels => labels.map(label => label.innerText.split('\n').filter(Boolean))), locale === 'zh'
-      ? [['DSH目录', '设置DSH程序或者源码的路径'], ['外观', '软件的主题样式模式'], ['语言', '软件的显示语言'], ['开机自启', '是否开机自动静默运行软件']]
-      : [['DSH directory', 'Project root'], ['Appearance', 'Theme style mode of the software'], ['Language', 'Display language'], ['Launch at startup', 'Auto-run the app silently on startup']])
+      ? [['DSH目录', '设置DSH程序或者源码的路径'], ['外观', '软件的主题样式模式'], ['语言', '软件的显示语言'], ['开机自启', '是否开机自动静默运行软件'], ['退出时停止服务', '退出软件时一并停止服务']]
+      : [['DSH directory', 'Project root'], ['Appearance', 'Theme style mode of the software'], ['Language', 'Display language'], ['Launch at startup', 'Auto-run the app silently on startup'], ['Stop on exit', 'Stop the service when the app exits']])
     assert.equal(await page.locator('.settings-app-version').innerText(), `v${metadata.version}`)
     assert.equal(await page.locator('.settings-app-description').innerText(), locale === 'zh'
       ? '简介：启动和管理本地 Web 服务。'

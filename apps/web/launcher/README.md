@@ -1,54 +1,150 @@
-# dsh web one-click launcher
+<p align="center">
+  <img src="public/appicon-512.png" alt="DSH Web Launcher" width="112" height="112" />
+</p>
 
-English | [中文](README.zh.md)
+<h1 align="center">DSH Web Launcher</h1>
 
-A standalone Tauri GUI application for managing the DeepSeek Harness web development server lifecycle.
+<p align="center">
+  A tiny desktop app that starts, stops, and watches your local
+  <b>DeepSeek&nbsp;Harness</b> web server — one click, no terminal.
+</p>
 
-## Directory contents
+<p align="center">
+  <img src="https://img.shields.io/badge/platform-Windows-0078D6?logo=windows&logoColor=white" alt="Platform: Windows" />
+  <img src="https://img.shields.io/badge/Tauri-2-FFC131?logo=tauri&logoColor=white" alt="Tauri 2" />
+  <img src="https://img.shields.io/badge/Rust-stable-000000?logo=rust&logoColor=white" alt="Rust" />
+  <img src="https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black" alt="React 18" />
+  <img src="https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white" alt="TypeScript 5" />
+  <img src="https://img.shields.io/badge/version-0.1.0-blue" alt="Version 0.1.0" />
+  <img src="https://img.shields.io/badge/license-MIT-green" alt="License: MIT" />
+</p>
 
-- `package.json` — Node.js project manifest with React frontend and Tauri build scripts
-- `src/` — React frontend source code
-- `public/` — Static assets
-- `scripts/` — Icon generation and browser UI checks
-- `src-tauri/` — Rust/Tauri backend source code
-- `tsconfig.json` — TypeScript configuration
-- `vite.config.ts` — Vite build configuration
-- `tailwind.config.cjs` — Tailwind CSS configuration
+<p align="center">
+  <b>English</b> · <a href="README.zh.md">中文</a>
+</p>
 
-## Usage
+---
 
-The main button starts a stopped service or opens a running service. A running service shows Restart and Stop as icon buttons on the right, whether this launcher or another program started it. Install dependencies and Build pages are available while the service is stopped.
+## 📖 What is this?
 
-The Logs tab combines the latest 200 backend and frontend entries, including IPC failures. Warnings and errors stay in the log rather than opening dialogs or toasts. The status badge contains a localized error tooltip; an unavailable status can be retried there. Log timestamps show UTC time to milliseconds, with the full timestamp in the tooltip and copied text. Entries appear as they are produced, and installing, building, starting, and stopping all stream into the same view. Copy and Clear share the tab toolbar; clearing removes both frontend and backend entries immediately.
+`dsh web` is the DeepSeek Harness local web server, normally started from a
+terminal with `pnpm dsh web`. **DSH Web Launcher** wraps that in a small desktop
+window, so you can manage the server, install dependencies, and build the
+frontend without touching the command line.
 
-App settings shows the version beside the application name, with left-aligned labels and right-aligned controls. Choose the DSH project root using the button inside the path input, or type a path and save it with Enter or by leaving the field. Appearance and language preferences are persisted. Launch at startup writes or removes the operating system's sign-in entry and is off until switched on; a sign-in launch stays in the system tray instead of opening the window.
+## ✨ Features
 
-The launcher detects listeners on port 3080. A service another program started can be opened, restarted, or stopped like one this launcher started; stopping it terminates the process holding the port. The status badge marks such a service as already running (external).
+- 🟢 **One-click lifecycle** — the main button adapts to state (Start → Open →
+  Restart / Stop); Install and Build are available while the service is stopped.
+- 🔌 **External-service aware** — a server started by another program on port
+  `3080` can also be opened, restarted, or stopped (shown as *external*).
+- 📜 **Unified live log** — backend, frontend, and IPC messages stream into one
+  view; warnings and errors stay in the log (no dialogs or toasts), with Copy
+  and Clear in the toolbar.
+- ⚙️ **Persisted settings** — project directory, theme, language,
+  launch-at-startup (off by default), and stop-on-exit (on by default; stops
+  only the service this launcher started).
+- 🖥️ **System tray** — closing the window hides it to the tray; quit from there.
+- 🌏 **Bilingual UI** — Simplified Chinese and English.
 
-Open DSH and the GitHub link in App settings open in the default browser. A launcher running elevated hands the link to Explorer, so the browser starts without elevated rights and does not refuse the request.
+## 🏗️ Architecture
 
-## Development
+A thin **Rust core** (via [Tauri 2](https://tauri.app)) owns the server process and settings, while a **React + TypeScript** frontend renders the window and talks to it over Tauri's typed IPC. Vite and Tailwind CSS handle the frontend build and styling.
 
-Run these commands in `apps/web/launcher` using a repository-supported Node version (`^22.19` or `>=24`). This standalone npm project is not a member of the repository's pnpm workspace.
+## 📂 Project structure
 
-```bash
-npm install
-npm run tauri:dev
-npm run build
-npm run tauri:build
+```text
+apps/web/launcher/
+├─ src/                    React frontend
+│  ├─ components/          UI: status badge, controls, log viewer, settings
+│  ├─ hooks/               Server-status polling, log stream, theme
+│  ├─ i18n/                zh / en text dictionaries
+│  └─ lib/tauri-api.ts     Typed wrappers over the Rust IPC commands
+├─ src-tauri/              Rust backend (Tauri 2)
+│  ├─ src/lib.rs           App setup, tray, window, IPC command handlers
+│  ├─ src/process.rs       dsh-web lifecycle + process-tree termination
+│  ├─ src/state.rs         Settings load/save, backend log strings (i18n)
+│  ├─ bundle/*.iss         Inno Setup installer script
+│  └─ Tauri.toml           Window, bundle, and security configuration
+├─ scripts/                Packaging, icon generation, UI tests, maintenance
+├─ public/                 App icons and images
+├─ docs/                   Packaging guide and deep-dive notes
+└─ package.json            Scripts and dependencies
 ```
 
-Tauri commands require Rust and the platform's native build tools. For frontend-only development, use `npm run dev`; server controls require Tauri.
+## 🚀 Getting started
 
-## UI checks
+> Run everything inside `apps/web/launcher`. This is a **standalone npm project**
+> — it is not part of the repository's pnpm workspace.
 
-With the repository's dependencies installed and the launcher frontend running, run `npm run test:ui`. The checks reuse `apps/web`'s Playwright dependency and simulate Tauri responses; they do not execute real install, build, start, or stop operations. Windows uses installed Microsoft Edge; other platforms require Playwright Chromium. Set `LAUNCHER_TEST_URL` to test a different frontend URL.
+### 1. Prerequisites
 
-Checks cover service ownership, external-service controls, operation feedback, repeated clicks, long logs, Chinese/English layouts, and background pointer motion. Screenshots are written to the system temporary directory under `dsh-launcher-ui`.
+- **Node.js** `^22.19` or `>=24`
+- **Rust** (stable) + the platform build tools (MSVC on Windows) — required by Tauri
+- **pnpm** on your `PATH` — the managed server runs via `pnpm dsh web`
+- **Windows** with the Microsoft Edge **WebView2** runtime (preinstalled on Win 10/11)
 
-## Notes
+### 2. Install & run
 
-- `dsh web` listens on `http://127.0.0.1:3080` by default.
-- Service and dependency operations run `pnpm` in the DSH project root, so pnpm must be installed and reachable on `PATH`.
-- Closing the window hides it to the system tray; use the tray menu to exit.
-- The translucent background artwork responds subtly to mouse movement, but stays still for touch input or reduced-motion preferences.
+```bash
+npm install          # install frontend dependencies
+npm run tauri:dev    # launch the full app with hot reload
+```
+
+### 3. Build
+
+```bash
+npm run tauri:build  # compile a release build (and Tauri's MSI)
+```
+
+### Common commands
+
+| Command | What it does |
+| --- | --- |
+| `npm run dev` | Frontend only, in a browser (no server control) |
+| `npm run tauri:dev` | Full desktop app with hot reload |
+| `npm run tauri:build` | Release build + Tauri MSI bundle |
+| `npm run package` | Portable exe **and** Inno Setup installer (Windows) |
+| `npm run test:ui` | Playwright UI checks |
+| `npm run clean:port` | Free the dev port `5173` if it is stuck |
+
+## 📦 Packaging (Windows)
+
+One command produces both deliverables into `release/`:
+
+```bash
+npm run package            # build once, then produce both
+npm run package:portable   # portable single-file exe only
+npm run package:installer  # Inno Setup installer only
+```
+
+| Deliverable | Description |
+| --- | --- |
+| **Portable exe** | The Tauri binary itself — frontend and icons are embedded, so it runs directly: no install, no unpack, no folder. Needs only the system WebView2 runtime. |
+| **Inno Setup installer** | Wraps the same exe and lets the user pick the install directory; installs per-user without elevation. Needs the Inno Setup compiler (`winget install JRSoftware.InnoSetup`). |
+
+👉 See **[docs/packaging.md](docs/packaging.md)** for size tuning, options, and the WebView2 requirement.
+
+## 🧪 Testing
+
+With the launcher frontend running, run the UI checks:
+
+```bash
+npm run test:ui
+```
+
+- Reuses `apps/web`'s Playwright dependency and **simulates** Tauri responses —
+  it does not run real install/build/start/stop operations.
+- Windows uses installed Microsoft Edge; other platforms need Playwright Chromium.
+- Set `LAUNCHER_TEST_URL` to target a different frontend URL.
+- Screenshots are written to `dsh-launcher-ui` in the system temp directory.
+
+## 💡 Notes & FAQ
+
+- **Port** — `dsh web` listens on `http://127.0.0.1:3080` by default.
+- **pnpm required** — service and dependency operations run `pnpm` in the DSH
+  project root, so pnpm must be installed and on `PATH`.
+
+## 📄 License
+
+[MIT](https://opensource.org/licenses/MIT) © MonoStudio

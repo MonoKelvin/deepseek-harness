@@ -17,6 +17,16 @@ pub struct AppSettings {
     /// which must never become the source of truth.
     #[serde(default)]
     pub autostart: bool,
+    /// Whether exiting the launcher also stops the dsh service it started.
+    /// Defaults to true and is persisted, so a settings file written before this
+    /// field existed loads as enabled. A service another program started has no
+    /// managed child and is left running on exit.
+    #[serde(default = "default_stop_services_on_exit")]
+    pub stop_services_on_exit: bool,
+}
+
+fn default_stop_services_on_exit() -> bool {
+    true
 }
 
 impl Default for AppSettings {
@@ -26,6 +36,7 @@ impl Default for AppSettings {
             theme: "system".to_string(),
             locale: "zh".to_string(),
             autostart: false,
+            stop_services_on_exit: true,
         }
     }
 }
@@ -172,6 +183,8 @@ pub fn t_log(locale: &str, key: &str, args: &[(&str, &str)]) -> String {
             ("dsh.set.success", "DSH directory updated successfully."),
             ("autostart.enabled", "The launcher will now start silently on sign-in."),
             ("autostart.disabled", "The launcher will no longer start automatically when you sign in."),
+            ("stopOnExit.enabled", "Exiting the launcher will also stop the dsh service it started."),
+            ("stopOnExit.disabled", "The dsh service will keep running after the launcher exits."),
             ("link.shell", "The launcher runs elevated, so the link was handed to Explorer to open the browser without elevated rights."),
             ("command.start", "Starting command: {command}"),
             ("command.succeeded", "Command succeeded: {command}"),
@@ -195,6 +208,8 @@ pub fn t_log(locale: &str, key: &str, args: &[(&str, &str)]) -> String {
             ("dsh.set.success", "DSH目录设置成功"),
             ("autostart.enabled", "已开启开机自启，登录系统后将自动静默运行"),
             ("autostart.disabled", "已关闭开机自启"),
+            ("stopOnExit.enabled", "已开启退出时停止由本软件启动的 dsh 服务"),
+            ("stopOnExit.disabled", "已关闭退出时停止服务，退出后 dsh 服务将继续运行"),
             ("link.shell", "启动器以管理员权限运行，已交由资源管理器以普通权限打开浏览器"),
             ("command.start", "开始执行命令：{command}"),
             ("command.succeeded", "命令执行成功：{command}"),

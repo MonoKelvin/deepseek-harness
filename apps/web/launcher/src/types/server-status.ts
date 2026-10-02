@@ -27,4 +27,6 @@ export interface AppSettings {
   locale: string
   /** Mirrors the OS autostart entry; not stored in the settings file. */
   autostart: boolean
+  /** Whether exiting the launcher also stops the dsh service it started. */
+  stopServicesOnExit: boolean
 }

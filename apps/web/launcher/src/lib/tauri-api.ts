@@ -39,6 +39,11 @@ export async function setAutostart(enabled: boolean): Promise<AppSettings> {
   return invoke<AppSettings>('set_autostart', { enabled })
 }
 
+/** Persist whether exiting the launcher also stops the dsh service it started. */
+export async function setStopServicesOnExit(enabled: boolean): Promise<AppSettings> {
+  return invoke<AppSettings>('set_stop_services_on_exit', { enabled })
+}
+
 /** Clear the backend log buffer without resetting entry IDs. */
 export async function clearLogs(): Promise<void> {
   await invoke('clear_logs')

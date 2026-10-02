@@ -53,6 +53,8 @@ export const zh = {
   'settings.language.en': 'English',
   'settings.autostart': '开机自启',
   'settings.autostartHint': '是否开机自动静默运行软件',
+  'settings.stopOnExit': '退出时停止服务',
+  'settings.stopOnExitHint': '退出软件时一并停止服务',
   'settings.dshDirectory': 'DSH目录',
   'settings.dshDirectoryHint': '设置DSH程序或者源码的路径',
   'settings.dshDirectoryPlaceholder': '自动检测',

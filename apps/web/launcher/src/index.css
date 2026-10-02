@@ -64,7 +64,6 @@
 .titlebar-identity { display: flex; align-items: center; align-self: stretch; flex: 1; gap: 8px; }
 .titlebar-identity > span { display: inline-flex; align-items: center; line-height: 20px; }
 .wordmark { font-size: 16px; font-weight: 600; letter-spacing: 0.02em; color: rgb(var(--foreground)); }
-.app-version { margin-left: 2px; font-family: theme('fontFamily.mono'); font-size: 13px; opacity: 0.8; }
 .launcher-main { display: flex; flex: 1; flex-direction: column; gap: 12px; min-height: 0; padding: 0 16px 16px; }
 
 .service { position: relative; isolation: isolate; flex-shrink: 0; overflow: hidden; padding: 22px 24px; border-radius: 18px; background: rgb(var(--service)); }
@@ -73,15 +72,15 @@
   z-index: -1;
   top: -46px;
   right: -26px;
-  width: clamp(240px, 55vw, 304px);
+  width: clamp(224px, 51vw, 284px);
   max-width: none;
   opacity: var(--art-opacity);
   pointer-events: none;
   user-select: none;
   transform: perspective(800px)
-    translate3d(calc(var(--pointer-x, 0) * 6px), calc(var(--pointer-y, 0) * 4px), 0)
-    rotateX(calc(var(--pointer-y, 0) * -3deg))
-    rotateY(calc(var(--pointer-x, 0) * 4deg))
+    translate3d(calc(var(--pointer-x, 0) * 10px), calc(var(--pointer-y, 0) * 7px), 0)
+    rotateX(calc(var(--pointer-y, 0) * -0.75deg))
+    rotateY(calc(var(--pointer-x, 0) * 1deg))
     rotate(-14deg);
   transition: transform 260ms ease-out;
 }
@@ -115,7 +114,7 @@
 
 .details-panel { display: flex; flex: 1; flex-direction: column; min-height: 0; overflow: hidden; border-radius: 16px; background: rgb(var(--background)); }
 .details-toolbar { display: flex; flex-shrink: 0; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 14px; }
-.panel-tabs { display: flex; width: fit-content; gap: 2px; padding: 3px; border-radius: 12px; background: rgb(var(--muted)); }
+.panel-tabs { display: flex; width: fit-content; gap: 2px; padding: 3px; border-radius: 9px; background: rgb(var(--muted)); }
 .panel-tabs button, .compact-choice > button { height: 26px; padding: 0 7px; }
 .log-result { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: rgb(var(--muted-foreground)); white-space: nowrap; }
 .log-result[data-failed='true'] { color: rgb(var(--destructive)); }

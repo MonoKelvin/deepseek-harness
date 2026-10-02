@@ -104,6 +104,21 @@ async fn set_autostart(state: State<'_, AppState>, app_handle: AppHandle, enable
   Ok(settings)
 }
 
+/// Persist whether exiting the launcher also stops the dsh service it started.
+#[tauri::command]
+async fn set_stop_services_on_exit(state: State<'_, AppState>, app_handle: AppHandle, enabled: bool) -> Result<AppSettings, String> {
+  let result = {
+    let mut settings = state.settings.lock().await;
+    settings.stop_services_on_exit = enabled;
+    settings.clone()
+  };
+  save_settings(&app_handle, &result);
+  let locale = state::current_locale(&result);
+  let key = if enabled { "stopOnExit.enabled" } else { "stopOnExit.disabled" };
+  append_log(&state.logs, LogSource::Launcher, LogSeverity::Info, state::t_log(&locale, key, &[])).await;
+  Ok(result)
+}
+
 #[tauri::command]
 async fn open_directory_picker(window: tauri::Window) -> Result<Option<String>, String> {
   use tauri_plugin_dialog::DialogExt;
@@ -243,6 +258,24 @@ fn toggle_main_window(app: &AppHandle) {
   }
 }
 
+/// Stop the managed dsh service the way the UI's stop button does when the
+/// launcher is configured to stop services on exit, so no exit path leaves the
+/// service it started orphaned. Only a service this launcher started is stopped;
+/// one another program started has no managed child and is left running.
+fn stop_services_before_exit(app: &AppHandle) {
+  let state = app.state::<AppState>();
+  tauri::async_runtime::block_on(async {
+    let settings = state.settings.lock().await.clone();
+    if !settings.stop_services_on_exit {
+      return;
+    }
+    let mut manager = state.manager.lock().await;
+    if manager.pid.is_some() || manager.child.is_some() {
+      let _ = stop_dsh_web(&mut manager, &settings).await;
+    }
+  });
+}
+
 /// Build the tray icon and verify it actually landed in the notification area.
 ///
 /// The tray-icon crate swallows `Shell_NotifyIcon(NIM_ADD)` failures and waits
@@ -275,7 +308,10 @@ fn configure_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
       Ok(()) => {
         tray.on_menu_event(|app, event| match event.id.as_ref() {
           "toggle" => toggle_main_window(app),
-          "quit" => app.exit(0),
+          "quit" => {
+            stop_services_before_exit(app);
+            app.exit(0);
+          }
           _ => {}
         });
         tray.on_tray_icon_event(|tray, event| {
@@ -347,7 +383,8 @@ pub fn run() {
     .invoke_handler(tauri::generate_handler![
       get_status, get_settings, set_dsh_directory, set_theme, set_locale, set_autostart, clear_logs,
       open_directory_picker,
-      install_deps, build_frontend, start_server, stop_server, restart_server, open_url
+      install_deps, build_frontend, start_server, stop_server, restart_server, open_url,
+      set_stop_services_on_exit
     ])
     .build(tauri::generate_context!())
     .expect("error building tauri app");
@@ -372,6 +409,13 @@ pub fn run() {
           let _ = window.hide();
         }
       }
+    }
+    // A window closed with no tray to summon it back falls through to exit here;
+    // stop the managed dsh service the same way the Quit menu does so no exit
+    // path orphans it. The tray's Quit item stops the service before calling
+    // `app.exit`, which terminates without reaching this event.
+    tauri::RunEvent::ExitRequested { .. } => {
+      stop_services_before_exit(app);
     }
     _ => {}
   });

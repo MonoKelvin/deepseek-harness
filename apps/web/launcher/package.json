@@ -16,7 +16,10 @@
     "tauri": "tauri",
     "fix-permissions": "node scripts/fix-permissions.mjs",
     "tauri:dev": "node scripts/clean-port.mjs && node scripts/fix-permissions.mjs && tauri dev",
-    "tauri:build": "node scripts/fix-permissions.mjs && tauri build"
+    "tauri:build": "node scripts/fix-permissions.mjs && tauri build",
+    "package": "node scripts/package.mjs",
+    "package:portable": "node scripts/package.mjs --portable",
+    "package:installer": "node scripts/package.mjs --installer"
   },
   "dependencies": {
     "@floating-ui/dom": "^1.8.0",
