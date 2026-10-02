@@ -333,7 +333,7 @@ test('language lives in settings, persists, and project link targets this direct
   await screenshot(page, 'settings-light-en.png')
   assert.equal(await page.locator('.settings-app-version').innerText(), `v${metadata.version}`)
   assert.equal(await page.locator('.settings-about').innerText().then((text) => text.includes(`v${metadata.version}`)), false)
-  await page.getByRole('button', { name: 'GitHub', exact: true }).click()
+  await page.getByRole('link', { name: 'GitHub', exact: true }).click()
   assert.deepEqual((await callsFor(page, 'open_url')).at(-1).args, { url: metadata.homepage })
   await page.reload()
   await page.getByRole('heading', { name: 'Local service', exact: true }).waitFor()

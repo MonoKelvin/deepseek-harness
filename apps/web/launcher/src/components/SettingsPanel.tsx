@@ -197,9 +197,7 @@ export function SettingsPanel({
           <span className="settings-open-source-title">{t('settings.openSource')}</span>
           <span className="settings-open-source-subtitle">{t('settings.license')}</span>
         </div>
-        <Button variant="ghost" size="sm" onClick={onOpenProject} data-tooltip={homepage}>
-          GitHub <TablerIcon name="externalLink" size={14} />
-        </Button>
+        <a className="settings-source-link" href={homepage} target="_blank" rel="noreferrer" onClick={onOpenProject} data-tooltip={homepage}>GitHub</a>
       </div>
     </section>
   )
