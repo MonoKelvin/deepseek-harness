@@ -200,7 +200,11 @@
   font-family: theme('fontFamily.sans');
   font-size: 12px;
   line-height: 1.5;
-  overflow-wrap: anywhere;
+  /* Keep URLs, file paths, and single-line tooltip text on one line so they do
+     not break at a hyphen (e.g. "deepseek-") and leave trailing blank space.
+     The inline width/maxWidth sizing still caps the box; overflow scrolls. */
+  white-space: nowrap;
+  overflow-wrap: normal;
   pointer-events: auto;
   animation: panel-appear 120ms ease-out;
 }
