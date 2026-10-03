@@ -85,11 +85,16 @@
   opacity: var(--art-opacity);
   pointer-events: none;
   user-select: none;
-  transform: perspective(900px)
+  /* The perspective distance must stay close to the ~284px element size or the
+     rotateX/rotateY turn is divided away to a couple of percent and reads as no
+     rotation at all. At 360px an 8deg turn foreshortens the edges by ~12%.
+     The innermost rotate() is the in-plane Z-axis spin: a small resting tilt
+     plus a mouse-following rotation layered on top of it. */
+  transform: perspective(360px)
     rotateX(calc(var(--pointer-y, 0) * -5deg))
-    rotateY(calc(var(--pointer-x, 0) * 7deg))
+    rotateY(calc(var(--pointer-x, 0) * 8deg))
     translate3d(calc(var(--pointer-x, 0) * 8px), calc(var(--pointer-y, 0) * 6px), 0)
-    rotate(-6deg);
+    rotate(calc(-3deg + var(--pointer-x, 0) * 4deg));
   transition: transform 320ms cubic-bezier(0.22, 0.61, 0.36, 1);
   display: block;
 }
@@ -230,7 +235,7 @@
 }
 /* No hovering pointer means no parallax source, so pin the artwork. */
 @media (hover: none) {
-  .launcher-art { transform: rotate(-6deg); transition: none; }
+  .launcher-art { transform: rotate(-3deg); transition: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
