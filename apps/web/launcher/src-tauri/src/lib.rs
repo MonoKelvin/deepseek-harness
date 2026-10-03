@@ -1,5 +1,8 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::fs::File;
+use std::io::{Read, Write};
+use std::path::PathBuf;
 
 use tauri::{
   menu::{Menu, MenuItem},
@@ -9,6 +12,88 @@ use tauri::{
 };
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tokio::sync::Mutex;
+
+/// Path to the lock file for single instance enforcement
+fn lock_file_path() -> PathBuf {
+  let temp_dir = std::env::temp_dir();
+  temp_dir.join("dsh-web-launcher.lock")
+}
+
+/// PID stored in the lock file
+struct LockFile {
+  path: PathBuf,
+  file: Option<File>,
+}
+
+impl LockFile {
+  fn new() -> Self {
+    let path = lock_file_path();
+    let temp_dir = std::env::temp_dir();
+    let parent = path.parent().unwrap_or(&temp_dir);
+    let _ = std::fs::create_dir_all(parent);
+    Self { path, file: None }
+  }
+
+  /// Try to acquire a single instance lock.
+  /// Returns true if this is the only instance (we got the lock), false if another instance is running.
+  fn try_lock(&mut self) -> bool {
+    let current_pid = std::process::id();
+
+    // Check if lock file exists and contains a valid PID
+    if let Ok(mut file) = File::open(&self.path) {
+      let mut pid_str = String::new();
+        if file.read_to_string(&mut pid_str).is_ok() {
+          if let Ok(past_pid) = pid_str.trim().parse::<u32>() {
+            // Check if the process is still running
+            if Self::is_process_running(past_pid) {
+              return false; // Another instance is running
+            }
+          }
+        }
+    }
+
+    // Create or overwrite the lock file with our PID
+    if let Ok(mut file) = File::create(&self.path) {
+      let _ = file.write_all(format!("{}", current_pid).as_bytes());
+      self.file = Some(file);
+      true
+    } else {
+      false
+    }
+  }
+
+  /// Check if a process with the given PID is still running
+  #[cfg(target_os = "windows")]
+  fn is_process_running(pid: u32) -> bool {
+    use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_INFORMATION};
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_INFORMATION, false, pid) };
+    handle.is_ok()
+  }
+
+  #[cfg(not(target_os = "windows"))]
+  fn is_process_running(pid: u32) -> bool {
+    // On Unix, check if the process exists by sending signal 0
+    use std::process::Command;
+    Command::new("kill")
+      .arg("-0")
+      .arg(pid.to_string())
+      .output()
+      .map(|output| output.status.success())
+      .unwrap_or(false)
+  }
+
+  /// Release the lock file
+  fn release(&mut self) {
+    let _ = self.file.take();
+    let _ = std::fs::remove_file(&self.path);
+  }
+}
+
+impl Drop for LockFile {
+  fn drop(&mut self) {
+    self.release();
+  }
+}
 
 use process::{
   append_log, attach_log_emitter, build_status, clear_logs as clear_log_buffer, log_command_result, run_pnpm,
@@ -422,6 +507,13 @@ fn is_autostart_launch() -> bool {
 }
 
 pub fn run() {
+  // Check for single instance - exit if another instance is running
+  let mut lock_file = LockFile::new();
+  if !lock_file.try_lock() {
+    eprintln!("Another instance of DSH launcher is already running. Please close the existing instance first.");
+    std::process::exit(1);
+  }
+
   let manager = ServerManager::new();
   let logs = manager.logs.clone();
   let settings = Arc::new(Mutex::new(AppSettings::default()));

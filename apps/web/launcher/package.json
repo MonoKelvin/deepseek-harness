@@ -1,6 +1,6 @@
 {
   "name": "@deepseek-ai/dsh-web-launcher",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Standalone Tauri GUI for managing the dsh web dev server lifecycle",
   "license": "MIT",
   "private": true,
