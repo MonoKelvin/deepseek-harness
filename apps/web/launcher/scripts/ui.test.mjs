@@ -128,7 +128,7 @@ async function pageFor(t, fixture = {}, viewport = { width: 620, height: 480 }) 
   await page.goto(url)
   await page.locator('.service-state:not([data-state="loading"])').waitFor()
   await page.locator('.wordmark').waitFor()
-  await page.locator('.launcher-art').evaluate((image) => image.decode())
+  await page.locator('.launcher-art[data-ready="true"]').waitFor()
   return page
 }
 
@@ -459,8 +459,8 @@ for (const locale of ['zh', 'en']) {
     const page = await pageFor(t, { locale, settings: { dshDirectory: longPath } })
     await page.getByRole('button', { name: locale === 'zh' ? '软件设置' : 'Settings', exact: true }).click()
     assert.deepEqual(await page.locator('.setting-label').evaluateAll(labels => labels.map(label => label.innerText.split('\n').filter(Boolean))), locale === 'zh'
-      ? [['DSH目录', '设置DSH程序或者源码的路径'], ['服务端口', 'dsh 服务监听的端口'], ['外观', '软件的主题样式模式'], ['语言', '软件的显示语言'], ['开机自启', '是否开机自动静默运行软件'], ['退出时停止服务', '退出软件时一并停止服务']]
-      : [['DSH directory', 'Project root'], ['Server port', 'Port the dsh service listens on'], ['Appearance', 'Theme style mode of the software'], ['Language', 'Display language'], ['Launch at startup', 'Auto-run the app silently on startup'], ['Stop on exit', 'Stop the service when the app exits']])
+      ? [['DSH目录', '设置DSH程序或者源码的路径'], ['服务端口', 'dsh 服务监听的端口'], ['外观', 'MIT 协议'], ['语言', '软件的显示语言'], ['开机自启', '是否开机自动静默运行软件'], ['退出时停止服务', '退出软件时一并停止服务']]
+      : [['DSH directory', 'Project root'], ['Server port', 'Port the dsh service listens on'], ['Appearance', 'MIT License'], ['Language', 'Display language'], ['Launch at startup', 'Auto-run the app silently on startup'], ['Stop on exit', 'Stop the service when the app exits']])
     assert.equal(await page.locator('.settings-app-version').innerText(), `v${metadata.version}`)
     assert.equal(await page.locator('.settings-app-description').innerText(), locale === 'zh'
       ? '一款用于启动、停止并监控本地 DeepSeek Harness Web端服务的工具软件。'
@@ -589,7 +589,7 @@ test('disabled controls explain their availability and Escape dismisses the tool
 test('artwork follows the pointer without moving controls', async (t) => {
   const page = await pageFor(t)
   const art = page.locator('.launcher-art')
-  assert.equal(await art.evaluate((image) => image.naturalWidth > 0 && getComputedStyle(image).pointerEvents === 'none'), true)
+  assert.equal(await art.evaluate((node) => node.width > 0 && getComputedStyle(node).pointerEvents === 'none'), true)
   const original = await art.evaluate((image) => getComputedStyle(image).transform)
   const button = page.getByRole('button', { name: '启动服务', exact: true })
   const bounds = await button.boundingBox()
@@ -597,16 +597,68 @@ test('artwork follows the pointer without moving controls', async (t) => {
   await page.waitForFunction((original) => getComputedStyle(document.querySelector('.launcher-art')).transform !== original, original)
   assert.deepEqual(await button.boundingBox(), bounds)
   await page.mouse.move(0, 0)
-  await page.waitForFunction(() => !document.querySelector('.launcher').style.getPropertyValue('--pointer-x'))
+  await page.waitForFunction(() => !document.querySelector('.launcher-art').style.getPropertyValue('--pointer-x'))
 })
-for (const mode of ['reducedMotion', 'touch']) {
-  test(`artwork remains still with ${mode}`, async (t) => {
-    const page = await pageFor(t, { [mode]: true })
-    const original = await page.locator('.launcher-art').evaluate((image) => getComputedStyle(image).transform)
-    if (mode === 'touch') {
-      await page.touchscreen.tap(480, 100)
-      assert.equal(await page.getByRole('button', { name: '安装', exact: true }).locator('.action-label').evaluate((node) => getComputedStyle(node).opacity), '1')
-    } else await page.mouse.move(500, 100)
-    assert.equal(await page.locator('.launcher-art').evaluate((image) => getComputedStyle(image).transform), original)
+test('artwork remains still with touch', async (t) => {
+  const page = await pageFor(t, { touch: true })
+  const original = await page.locator('.launcher-art').evaluate((node) => getComputedStyle(node).transform)
+  await page.touchscreen.tap(480, 100)
+  assert.equal(await page.getByRole('button', { name: '安装', exact: true }).locator('.action-label').evaluate((node) => getComputedStyle(node).opacity), '1')
+  assert.equal(await page.locator('.launcher-art').evaluate((node) => getComputedStyle(node).transform), original)
+})
+
+// The OS "Animation effects" toggle drives prefers-reduced-motion, and the
+// pointer-follow tilt is intentional, so it must still track the pointer there.
+test('artwork still tilts with the pointer under reduced motion', async (t) => {
+  const page = await pageFor(t, { reducedMotion: true })
+  const original = await page.locator('.launcher-art').evaluate((node) => getComputedStyle(node).transform)
+  await page.mouse.move(500, 100)
+  await page.waitForFunction((original) => getComputedStyle(document.querySelector('.launcher-art')).transform !== original, original)
+})
+
+// The blink plays even under reduced motion: the OS "Animation effects" toggle
+// drives the media feature, and gating the blink on it left the art frozen.
+for (const fixture of [{}, { reducedMotion: true }]) {
+  const label = fixture.reducedMotion ? ' even under reduced motion' : ''
+  test(`background animation plays a blink and returns to the rest pose${label}`, async (t) => {
+    const page = await pageFor(t, fixture)
+    const result = await page.evaluate(async () => {
+      let module
+      try {
+        module = await import('/src/lib/background-animation.ts')
+      } catch {
+        return { served: false }
+      }
+      const canvas = document.createElement('canvas')
+      const animation = new module.BackgroundAnimation(canvas, {
+        blinkMinDelayMs: 0, blinkMaxDelayMs: 0, blinkDurationMs: 150, maxFrameSize: 64,
+      })
+      animation.start()
+      const ready = await new Promise((resolve) => {
+        const timeout = setTimeout(() => resolve(false), 3000)
+        const poll = setInterval(() => {
+          if (canvas.dataset.ready !== 'true') return
+          clearInterval(poll)
+          clearTimeout(timeout)
+          resolve(true)
+        }, 10)
+      })
+      if (!ready) { animation.dispose(); return { served: true, ready: false } }
+      const rest = canvas.toDataURL()
+      let changed = 0
+      let returned = false
+      const deadline = performance.now() + 1500
+      while (performance.now() < deadline) {
+        await new Promise((resolve) => requestAnimationFrame(resolve))
+        if (canvas.toDataURL() !== rest) changed += 1
+        else if (changed > 0) returned = true
+      }
+      animation.dispose()
+      return { served: true, ready: true, changed, returned }
+    })
+    if (!result.served) return t.skip('frame-sequence module is not served by this target')
+    assert.equal(result.ready, true, 'rest pose rendered')
+    assert.ok(result.changed > 0, 'a blink changed the canvas')
+    assert.equal(result.returned, true, 'the canvas returned to the rest pose')
   })
 }

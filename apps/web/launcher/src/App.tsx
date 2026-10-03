@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { getVersion } from '@tauri-apps/api/app'
 import { homepage } from '../package.json'
@@ -14,6 +14,7 @@ import { useServerStatus } from './hooks/useServerStatus'
 import { useLogStream } from './hooks/useLogStream'
 import { useTheme, hasStoredTheme } from './hooks/useTheme'
 import { useI18n, hasStoredLocale, type TranslationKey } from './i18n'
+import { BackgroundAnimation } from './lib/background-animation'
 import { MAX_LOG_ENTRIES } from './lib/constants'
 import {
   installDeps, buildFrontend, startServer, stopServer, restartServer, openUrl,
@@ -57,6 +58,8 @@ function App() {
   const [copied, setCopied] = useState(false)
   const nextErrorId = useRef(-1)
   const copyTimer = useRef<number | null>(null)
+  const launcherRef = useRef<HTMLDivElement>(null)
+  const artCanvasRef = useRef<HTMLCanvasElement>(null)
 
   const reportError = useCallback((action: TranslationKey, error: unknown) => {
     // Negative IDs keep IPC-independent errors distinct from backend entries.
@@ -88,6 +91,19 @@ function App() {
   useLayoutEffect(() => {
     void revealWindowOnce()
   }, [])
+
+  // Drive the pointer-reactive blink background. The class decodes the frames,
+  // schedules the blinks, and tracks the pointer; load failures go to the run log.
+  useEffect(() => {
+    const canvas = artCanvasRef.current
+    if (!canvas) return
+    const animation = new BackgroundAnimation(canvas, {
+      pointerTarget: launcherRef.current,
+      onError: message => reportError('background.frames', new Error(message)),
+    })
+    animation.start()
+    return () => animation.dispose()
+  }, [reportError])
 
   useEffect(() => {
     let cancelled = false
@@ -234,21 +250,8 @@ function App() {
     }, COPY_FEEDBACK_MS)
   }
 
-  const moveBackdrop = (event: PointerEvent<HTMLDivElement>) => {
-    if (event.pointerType !== 'mouse' || window.matchMedia('(prefers-reduced-motion: reduce), (hover: none)').matches) return
-    const bounds = event.currentTarget.getBoundingClientRect()
-    const x = Math.max(-1, Math.min(1, (event.clientX - bounds.left) / bounds.width * 2 - 1))
-    const y = Math.max(-1, Math.min(1, (event.clientY - bounds.top) / bounds.height * 2 - 1))
-    event.currentTarget.style.setProperty('--pointer-x', x.toFixed(3))
-    event.currentTarget.style.setProperty('--pointer-y', y.toFixed(3))
-  }
-  const resetBackdrop = (event: PointerEvent<HTMLDivElement>) => {
-    event.currentTarget.style.removeProperty('--pointer-x')
-    event.currentTarget.style.removeProperty('--pointer-y')
-  }
-
   return (
-    <div className="launcher" style={{ borderRadius: windowStyle.cornerRadius }} lang={locale === 'zh' ? 'zh-CN' : 'en'} onPointerMove={moveBackdrop} onPointerLeave={resetBackdrop}>
+    <div ref={launcherRef} className="launcher" style={{ borderRadius: windowStyle.cornerRadius }} lang={locale === 'zh' ? 'zh-CN' : 'en'}>
       <TooltipHost />
       <header className="titlebar" data-tauri-drag-region>
         <div className="titlebar-identity" data-tauri-drag-region>
@@ -260,7 +263,7 @@ function App() {
       </header>
       <main className="launcher-main">
         <section className="service" aria-label={t('status.title')}>
-          <img className="launcher-art" src="./appicon-dsh-girl.png" alt="" aria-hidden="true" draggable={false} />
+          <canvas ref={artCanvasRef} className="launcher-art" aria-hidden="true" />
           <ServerStatus
             status={status}
             loading={loading}

@@ -8,6 +8,9 @@ import { SegmentedControl } from './SegmentedControl'
 import { Switch } from './ui/switch'
 import { TablerIcon } from '../lib/TablerIcon'
 
+// Derive the MIT License URL from the project homepage; the LICENSE file lives at the repo root.
+const LICENSE_URL = homepage.replace(/\/tree\/master\/apps\/web\/launcher$/, '/blob/master/LICENSE')
+
 interface SettingsPanelProps {
   version: string
   theme: ThemePreference
@@ -127,7 +130,7 @@ export function SettingsPanel({
         <div className="setting-row">
           <div className="setting-label">
             <span>{t('settings.theme')}</span>
-            <p className="setting-caption">{t('settings.themeHint')}</p>
+            <a className="setting-caption" href={LICENSE_URL} target="_blank" rel="noreferrer" onClick={event => event.stopPropagation()}>{t('settings.themeHint')}</a>
           </div>
           <div className="setting-control">
             <SegmentedControl
@@ -195,7 +198,7 @@ export function SettingsPanel({
       <div className="settings-about">
         <div className="settings-open-source">
           <span className="settings-open-source-title">{t('settings.openSource')}</span>
-          <span className="settings-open-source-subtitle">{t('settings.license')}</span>
+          <a className="settings-open-source-subtitle" href={LICENSE_URL} target="_blank" rel="noreferrer" onClick={event => event.stopPropagation()}>{t('settings.license')}</a>
         </div>
         <a className="settings-source-link" href={homepage} target="_blank" rel="noreferrer" onClick={onOpenProject} data-tooltip={homepage}><TablerIcon name="externalLink" size={14} /> GitHub</a>
       </div>
