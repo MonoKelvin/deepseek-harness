@@ -1178,6 +1178,24 @@ describe('registry-global session delete', () => {
     expect(result.deleteSession).not.toHaveBeenCalled()
   })
 
+  it('refuses to delete a session with an active persistence write handle', async () => {
+    const dir = await makeDir('delete-writer')
+    const result = await harness({ sessions: [header('held', dir, 100)] })
+    // The persistence backend reports an active write handle (e.g. a session
+    // whose Agent stopped without closing its handle).
+    result.deleteSession.mockRejectedValueOnce(
+      Object.assign(new Error('busy'), { name: 'SessionAlreadyOwnedError' }),
+    )
+
+    await expect(result.registry.deleteSession(SessionId('held')))
+      .rejects.toMatchObject({
+        name: 'WorkspaceActiveSessionError',
+        activity: [{ kind: 'persistence-handle' }],
+      })
+    // Persistence was contacted once, not left in a half-deleted state.
+    expect(result.deleteSession).toHaveBeenCalledTimes(1)
+  })
+
   it('cleans the registry sets even when persistence no longer holds the session', async () => {
     const dir = await makeDir('delete-gone')
     const result = await harness({ sessions: [header('stale', dir, 100)] })

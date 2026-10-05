@@ -31,7 +31,14 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
  * registry), `job` (the job registry seam), `subagent` (the Subagent
  * runtime), and `schedule` (the Schedule plugin).
  */
-export interface SessionActivityKindMap {}
+export interface SessionActivityKindMap {
+  /**
+   * A live write handle to persistence is still open for this session.
+   * Reported by the workspace registry when a delete cannot proceed because
+   * the persistence backend refuses to remove a session that a writer owns.
+   */
+  'persistence-handle': true
+}
 
 /** One activity family key. */
 export type SessionActivityKind = keyof SessionActivityKindMap

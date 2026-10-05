@@ -320,7 +320,7 @@ describe('WorkspaceController commands', () => {
     await expect(controller.deleteSession({ sessionId: session.id }))
       .rejects.toMatchObject({
         code: 'workspace/session-active',
-        details: { sessionId: session.id, activity: ['session-persistence-write-handle'] },
+        details: { sessionId: session.id, activity: [{ kind: 'persistence-handle' }] },
       })
   })
 
