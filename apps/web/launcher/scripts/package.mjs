@@ -176,6 +176,16 @@ function runUpx() {
 function makePortable(version, exePath = builtExe) {
   const out = join(releaseDir, `dsh-web-launcher-${version}-portable.exe`)
   copyFileSync(exePath, out)
+
+  // Copy WebView2Loader.dll needed by GNU toolchain builds.
+  // The DLL is at the same directory as the exe in the target/release folder.
+  const webView2Dll = join(dirname(exePath), 'WebView2Loader.dll')
+  if (existsSync(webView2Dll)) {
+    const dllOut = join(releaseDir, 'WebView2Loader.dll')
+    copyFileSync(webView2Dll, dllOut)
+    log(`copied WebView2Loader.dll to release directory`)
+  }
+
   log(`portable → ${rel(out)} (${mb(out)})`)
 }
 
