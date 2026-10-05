@@ -485,6 +485,37 @@ export class JsonlBackendTracker {
   }
 
   /**
+   * Drain, flush, and release a write handle that is still open for one session
+   * so the session's artifact can be safely deleted. Handles that are mid-
+   * construction (`null`) release the claim directly. A handle that is already
+   * closing counts as released. Only a persistent lock-release failure keeps the
+   * session owned.
+   * @param id - the session whose write handle to release.
+   * @throws {SessionAlreadyOwnedError} when the handle cannot be released.
+   */
+  async releaseWriterBeforeDelete(id: SessionId): Promise<void> {
+    const handle = this.writers.get(id)
+    if (handle === undefined || handle === null) {
+      // A mid-construction claim holds nothing durable yet; just drop the bookkeeping.
+      this.writers.delete(id)
+      return
+    }
+    try {
+      // Drain the routed buffer durably and release the cross-process lock.
+      await handle.drainLive()
+      await handle.close()
+    } catch (error: unknown) {
+      // If close fails, the writers map still holds the entry, so hasActiveWriter
+      // remains true and SessionAlreadyOwnedError is thrown by the caller.
+      throw error
+    }
+    // close() releases the handle's bookkeeping via release(); ensure it's gone.
+    if (this.writers.has(id)) {
+      throw new SessionAlreadyOwnedError(id)
+    }
+  }
+
+  /**
    * Track one open handle for teardown and, for a write handle, bind it as
    * the session's live event route.
    * @param handle - the just-constructed handle.

@@ -436,15 +436,16 @@ export function runPersistenceContract(name: string, make: () => Promise<Contrac
       }
     })
 
-    it('delete drops a created-but-unmaterialized session and frees the id', async () => {
+    it('delete drains and closes a live write handle, then removes the session', async () => {
       const { persistence, dispose } = await make()
       try {
         const m = meta('delete-open-writer', '/work')
         const creator = await persistence.create(m)
-        // A live write handle (here the creator) blocks deletion: the caller
-        // must close it first, or the writer could recreate the artifact.
-        await expect(persistence.delete(m.id)).rejects.toBeInstanceOf(SessionAlreadyOwnedError)
-        await creator.close()
+        // A live write handle (here the creator) is drained and released during
+        // deletion so the caller does not need to close it first.
+        await expect(persistence.delete(m.id)).resolves.toBeUndefined()
+        expect(creator).toBeDefined() // handle is still referenced, not yet closed
+        expect(await persistence.stat(m.id)).toBeUndefined()
       } finally {
         await dispose()
       }

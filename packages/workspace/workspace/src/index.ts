@@ -455,18 +455,7 @@ export class WorkspaceRegistry extends Service {
         'workspace/session-activity', { sessionId }, () => Promise.resolve([]),
       )
       if (activity.length > 0) throw new WorkspaceActiveSessionError(sessionId, activity, 'delete')
-      try {
-        await this.ctx.sessionPersistence.delete(sessionId)
-      } catch (error) {
-        // A write handle that is still open in-process (e.g. a session whose
-        // Agent stopped without closing its persistence handle) is treated as
-        // activity: the Host surfaces the same workspace/session-active refusal
-        // so a user stops the work first, and the UI disables the menu row.
-        if (error instanceof Error && error.name === 'SessionAlreadyOwnedError') {
-          throw new WorkspaceActiveSessionError(sessionId, [{ kind: 'persistence-handle' }], 'delete')
-        }
-        throw error
-      }
+      await this.ctx.sessionPersistence.delete(sessionId)
       const state = this.requireState()
       if (state.archivedSessionIds.includes(sessionId) || state.pinnedSessionIds.includes(sessionId)) {
         await this.setState({
