@@ -12,8 +12,9 @@
 //     (ISCC.exe) on PATH or at its default install location.
 //
 // Windows-only. Usage:
-//   node scripts/package.mjs [--portable] [--installer] [--skip-build] [--upx]
+//   node scripts/package.mjs [--portable] [--installer] [--skip-build] [--upx] [--gnu]
 // With neither --portable nor --installer, both deliverables are produced.
+// --gnu uses the GNU toolchain (x86_64-pc-windows-gnu) instead of MSVC.
 
 import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, copyFileSync, readFileSync, statSync } from 'node:fs'
@@ -49,6 +50,7 @@ Options:
   --installer   Produce only the Inno Setup installer
   --skip-build  Reuse the existing release binary instead of rebuilding
   --upx         Compress the binary with UPX if available (smaller, may trip AV)
+  --gnu         Use GNU toolchain (x86_64-pc-windows-gnu) instead of MSVC
   -h, --help    Show this help
 
 With neither --portable nor --installer, both deliverables are produced.`)
@@ -58,18 +60,20 @@ function parseArgs(argv) {
   const flags = new Set(argv.slice(2))
   if (flags.has('--help') || flags.has('-h')) { printHelp(); process.exit(0) }
   for (const flag of flags) {
-    if (!['--portable', '--installer', '--skip-build', '--upx'].includes(flag)) {
+    if (!['--portable', '--installer', '--skip-build', '--upx', '--gnu'].includes(flag)) {
       fail(`unknown option: ${flag} (use --help)`)
     }
   }
   const portable = flags.has('--portable')
   const installer = flags.has('--installer')
   const both = !portable && !installer
+  const gnu = flags.has('--gnu')
   return {
     portable: portable || both,
     installer: installer || both,
     skipBuild: flags.has('--skip-build'),
     upx: flags.has('--upx'),
+    gnu,
   }
 }
 
@@ -93,12 +97,25 @@ function run(cmd, args, opts = {}) {
   if (result.status !== 0) fail(`command failed (${result.status ?? result.signal}): ${quoted}`)
 }
 
-function build() {
+function build(gnu = false) {
   log('building release binary (tauri build --no-bundle)…')
   // Reuse the integrity fix wired into tauri:build so a Low-integrity tree
   // self-heals before the Rust compile; tauri runs the frontend build itself.
   run('node', [join(here, 'fix-permissions.mjs')])
-  run('npx', ['tauri', 'build', '--no-bundle'])
+  if (gnu) {
+    log('using GNU toolchain (x86_64-pc-windows-gnu)')
+    // Use GNU toolchain with MinGW-w64 for linking
+    // Note: RUSTFLAGS env doesn't override .cargo/config.toml rustflags
+    // We just need to ensure the config.toml has the correct flags
+    const result = spawnSync('npx', ['tauri', 'build', '--no-bundle', '--target=x86_64-pc-windows-gnu'], {
+      stdio: 'inherit', shell: true, cwd: projectDir
+    })
+    if (result.status !== 0) {
+      fail(`tauri build failed (${result.status ?? result.signal}) with GNU toolchain`)
+    }
+  } else {
+    run('npx', ['tauri', 'build', '--no-bundle'])
+  }
 }
 
 // Locate the Inno Setup compiler. Checks, in order: the ISCC environment
@@ -156,13 +173,13 @@ function runUpx() {
   log(`compressed (after: ${mb(builtExe)})`)
 }
 
-function makePortable(version) {
+function makePortable(version, exePath = builtExe) {
   const out = join(releaseDir, `dsh-web-launcher-${version}-portable.exe`)
-  copyFileSync(builtExe, out)
+  copyFileSync(exePath, out)
   log(`portable → ${rel(out)} (${mb(out)})`)
 }
 
-function makeInstaller(version) {
+function makeInstaller(version, exePath = builtExe) {
   const iscc = findISCC()
   if (!iscc) {
     fail('Inno Setup compiler (ISCC.exe) not found on PATH, in the default install '
@@ -171,7 +188,7 @@ function makeInstaller(version) {
   }
   const defines = [
     `/DMyAppVersion=${version}`,
-    `/DAppExe=${builtExe}`,
+    `/DAppExe=${exePath}`,
     `/DIconFile=${iconFile}`,
     `/DOutputDir=${releaseDir}`,
     `/DOutputBaseFilename=dsh-web-launcher-${version}-setup`,
@@ -186,12 +203,18 @@ function makeInstaller(version) {
 ensureWindows()
 const opts = parseArgs(process.argv)
 const version = readVersion()
+
+// Determine the correct binary path based on toolchain
+const builtExePath = opts.gnu
+  ? join(tauriDir, 'target', 'x86_64-pc-windows-gnu', 'release', 'dsh-web-launcher.exe')
+  : builtExe
+
 mkdirSync(releaseDir, { recursive: true })
-if (!opts.skipBuild) build()
-if (!existsSync(builtExe)) {
-  fail(`built binary not found: ${rel(builtExe)} — run without --skip-build first`)
+if (!opts.skipBuild) build(opts.gnu)
+if (!existsSync(builtExePath)) {
+  fail(`built binary not found: ${rel(builtExePath)} — run without --skip-build first`)
 }
 if (opts.upx) runUpx()
-if (opts.portable) makePortable(version)
-if (opts.installer) makeInstaller(version)
+if (opts.portable) makePortable(version, builtExePath)
+if (opts.installer) makeInstaller(version, builtExePath)
 log('done.')
