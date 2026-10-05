@@ -336,13 +336,23 @@ fn resolve_in_path(program: &str, search_path: &OsStr, extensions: &str) -> Opti
 /// install reports "program not found". Spawning the resolved path works because
 /// `CreateProcess` runs a batch file through `cmd.exe` and Rust escapes the
 /// arguments for it.
+///
+/// On Windows, child processes spawned with GNU toolchain can show console
+/// windows. We set `CREATE_NO_WINDOW` flag to prevent this.
 #[cfg(target_os = "windows")]
 fn pnpm_command(locale: &str) -> Result<tokio::process::Command, String> {
+  use std::os::windows::process::CommandExt;
+
   let search_path = std::env::var_os("PATH").unwrap_or_default();
   let extensions = std::env::var("PATHEXT").unwrap_or_else(|_| DEFAULT_PATHEXT.to_string());
   let program = resolve_in_path("pnpm", &search_path, &extensions)
     .ok_or_else(|| crate::state::t_log(locale, "pnpm.missing", &[]))?;
-  Ok(tokio::process::Command::new(program))
+
+  let mut cmd = tokio::process::Command::new(program);
+  // Set creation flags to prevent console window from appearing
+  // CREATE_NO_WINDOW = 0x08000000
+  cmd.creation_flags(0x0800_0000);
+  Ok(cmd)
 }
 
 /// Build the command that runs pnpm. `PATH` lookup needs no suffix handling here,
@@ -474,10 +484,12 @@ pub async fn start_dsh_web(manager: &mut ServerManager, settings: &crate::state:
 /// `terminate_listener`.
 #[cfg(target_os = "windows")]
 async fn terminate_process_tree(pid: u32) -> io::Result<()> {
+  use std::os::windows::process::CommandExt;
   tokio::process::Command::new("taskkill")
     .args(["/F", "/T", "/PID", &pid.to_string()])
     .stdout(Stdio::null())
     .stderr(Stdio::null())
+    .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
     .status()
     .await
     .map(|_| ())
@@ -591,7 +603,12 @@ async fn await_port_released(port: u16, timeout: Duration) -> bool {
 /// Read the PIDs `netstat` attributes the listening sockets of `port` to.
 #[cfg(target_os = "windows")]
 async fn listening_owners(port: u16) -> io::Result<Vec<u32>> {
-  let output = tokio::process::Command::new("netstat").args(["-ano", "-p", "tcp"]).output().await?;
+  use std::os::windows::process::CommandExt;
+  let output = tokio::process::Command::new("netstat")
+    .args(["-ano", "-p", "tcp"])
+    .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+    .output()
+    .await?;
   let text = String::from_utf8_lossy(&output.stdout);
   let suffix = format!(":{port}");
   let mut owners = Vec::new();
