@@ -305,6 +305,25 @@ describe('WorkspaceController commands', () => {
       .rejects.toMatchObject({ code: 'session/not-found' })
   })
 
+  it('refuses deletion when persistence holds an active write handle', async () => {
+    const { controller, ctx, root } = await harness()
+    const created = await controller.create({ path: stageDir(root, 'write-handle') })
+    const session = ctx.sessions.create(SessionId('held'), {
+      meta: { cwd: created.workspace.path },
+    })
+    // Simulate a write handle that is still active when delete is attempted.
+    const persistence = ctx.sessionPersistence as unknown as {
+      delete: (id: unknown) => Promise<void>
+    }
+    persistence.delete = vi.fn().mockRejectedValueOnce(Object.assign(new Error('held'), { name: 'SessionAlreadyOwnedError' }))
+
+    await expect(controller.deleteSession({ sessionId: session.id }))
+      .rejects.toMatchObject({
+        code: 'workspace/session-active',
+        details: { sessionId: session.id, activity: ['session-persistence-write-handle'] },
+      })
+  })
+
   it('pins only known unarchived Sessions and unpins idempotently', async () => {
     const { controller, ctx, root } = await harness()
     const created = await controller.create({ path: stageDir(root, 'pins') })

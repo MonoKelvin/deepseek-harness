@@ -219,6 +219,14 @@ export class WorkspaceCommands {
           { cause: error },
         )
       }
+      if (error instanceof Error && error.name === 'SessionAlreadyOwnedError') {
+        throw new RemoteError(
+          'workspace/session-active',
+          error.message,
+          { sessionId: request.sessionId, activity: ['session-persistence-write-handle'] },
+          { cause: error },
+        )
+      }
       throw error
     }
     return { deleted: true }
