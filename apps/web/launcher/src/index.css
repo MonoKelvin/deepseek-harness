@@ -173,8 +173,6 @@
 .setting-label { display: flex; flex-direction: column; gap: 2px; min-width: 0; text-align: left; }
 .setting-label > span, .setting-label > label { font-size: 13px; font-weight: 500; color: rgb(var(--foreground)); }
 .setting-caption { margin: 0; font-size: 11px; line-height: 1.4; color: rgb(var(--muted-foreground)); white-space: nowrap; }
-.setting-caption[href] { text-decoration-line: underline; text-underline-offset: 1px; text-decoration-thickness: 1px; }
-.setting-caption[href]:hover { color: rgb(var(--foreground)); }
 .setting-control { display: flex; min-width: 0; align-items: center; justify-content: flex-end; }
 .setting-path { position: relative; width: 100%; max-width: 260px; }
 .setting-input { width: 100%; min-width: 0; height: 32px; padding: 4px 36px 4px 10px; border: 1px solid rgb(var(--border)); border-radius: 6px; background: rgb(var(--background) / 0.5); font-family: theme('fontFamily.mono'); font-size: 12px; text-align: left; color: rgb(var(--foreground)); }

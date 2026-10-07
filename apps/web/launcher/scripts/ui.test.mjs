@@ -318,7 +318,7 @@ test('theme follows the system until explicitly selected, then persists on reloa
   await page.reload()
   await page.waitForFunction(() => document.documentElement.dataset.theme === 'light')
   await page.getByRole('button', { name: '软件设置', exact: true }).click()
-  await page.getByRole('button', { name: '跟随系统', exact: true }).click()
+  await page.getByRole('button', { name: '系统', exact: true }).click()
   await page.waitForFunction(() => document.documentElement.dataset.theme === 'dark')
 })
 
@@ -459,8 +459,8 @@ for (const locale of ['zh', 'en']) {
     const page = await pageFor(t, { locale, settings: { dshDirectory: longPath } })
     await page.getByRole('button', { name: locale === 'zh' ? '软件设置' : 'Settings', exact: true }).click()
     assert.deepEqual(await page.locator('.setting-label').evaluateAll(labels => labels.map(label => label.innerText.split('\n').filter(Boolean))), locale === 'zh'
-      ? [['DSH目录', '设置DSH程序或者源码的路径'], ['服务端口', 'dsh 服务监听的端口'], ['外观', 'MIT 协议'], ['语言', '软件的显示语言'], ['开机自启', '是否开机自动静默运行软件'], ['退出时停止服务', '退出软件时一并停止服务']]
-      : [['DSH directory', 'Project root'], ['Server port', 'Port the dsh service listens on'], ['Appearance', 'MIT License'], ['Language', 'Display language'], ['Launch at startup', 'Auto-run the app silently on startup'], ['Stop on exit', 'Stop the service when the app exits']])
+      ? [['DSH目录', '设置DSH程序或者源码的路径'], ['服务端口', 'dsh 服务监听的端口'], ['外观', '软件的显示主题'], ['语言', '软件的显示语言'], ['开机自启', '是否开机自动静默运行软件'], ['退出时停止服务', '退出软件时一并停止服务']]
+      : [['DSH directory', 'Project root'], ['Server port', 'Port the dsh service listens on'], ['Appearance', 'Display theme'], ['Language', 'Display language'], ['Launch at startup', 'Auto-run the app silently on startup'], ['Stop on exit', 'Stop the service when the app exits']])
     assert.equal(await page.locator('.settings-app-version').innerText(), `v${metadata.version}`)
     assert.equal(await page.locator('.settings-app-description').innerText(), locale === 'zh'
       ? '一款用于启动、停止并监控本地 DeepSeek Harness Web端服务的工具软件。'

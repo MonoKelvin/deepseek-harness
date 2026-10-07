@@ -45,7 +45,7 @@ export const en: Record<keyof typeof zh, string> = {
   'log.level.debug': 'Debug',
   'settings.title': 'Settings',
   'settings.theme': 'Appearance',
-  'settings.themeHint': 'MIT License',
+  'settings.themeHint': 'Display theme',
   'settings.theme.light': 'Light',
   'settings.theme.dark': 'Dark',
   'settings.theme.system': 'System',

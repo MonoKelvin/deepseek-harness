@@ -30,7 +30,8 @@ interface SettingsPanelProps {
 /** Edit persisted settings; directory and port changes save on blur or Enter. */
 export function SettingsPanel({
   version, theme, settings, dshDirectoryValid, serverRunning,
-  onThemeChange, onDshDirectoryChange, onBrowseDshDirectory, onServerPortChange, onLocaleChange, onAutostartChange, onStopServicesOnExitChange, onOpenProject,
+  onThemeChange, onDshDirectoryChange, onBrowseDshDirectory, onServerPortChange,
+  onLocaleChange, onAutostartChange, onStopServicesOnExitChange, onOpenProject,
 }: SettingsPanelProps) {
   const { t, locale } = useI18n()
   const [directory, setDirectory] = useState(settings?.dshDirectory ?? '')
@@ -88,7 +89,7 @@ export function SettingsPanel({
                 onBlur={() => {
                   if (directory !== (settings?.dshDirectory ?? '')) onDshDirectoryChange(directory)
                 }}
-                onKeyDown={event => {
+                onKeyDown={(event) => {
                   if (event.key === 'Enter') event.currentTarget.blur()
                 }}
                 data-invalid={directoryInvalid}
@@ -120,7 +121,7 @@ export function SettingsPanel({
               disabled={!settings || serverRunning}
               onChange={event => setPort(event.target.value)}
               onBlur={commitPort}
-              onKeyDown={event => {
+              onKeyDown={(event) => {
                 if (event.key === 'Enter') event.currentTarget.blur()
               }}
             />
@@ -130,7 +131,7 @@ export function SettingsPanel({
         <div className="setting-row">
           <div className="setting-label">
             <span>{t('settings.theme')}</span>
-            <a className="setting-caption" href={LICENSE_URL} target="_blank" rel="noreferrer" onClick={event => event.stopPropagation()}>{t('settings.themeHint')}</a>
+            <p className="setting-caption">{t('settings.themeHint')}</p>
           </div>
           <div className="setting-control">
             <SegmentedControl
