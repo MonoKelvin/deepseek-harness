@@ -7,6 +7,7 @@ everything from `apps/web/launcher`.
 npm run package              # build once, then produce both deliverables
 npm run package:portable     # portable single-file exe only
 npm run package:installer    # Inno Setup installer only
+npm run package:portable:gnu # portable single-file exe with GNU toolchain
 ```
 
 Both land in `release/` (git-ignored), named with the `package.json` version:
@@ -51,6 +52,43 @@ version is found automatically). The script in
 `src-tauri/bundle/dsh-web-launcher.iss` receives the version, binary path, icon,
 output directory, and (when present) the repository `LICENSE` as defines.
 
+## GNU Toolchain
+
+For users who cannot or prefer not to use MSVC, the project supports building with
+the GNU toolchain (MinGW-w64). This is useful when:
+
+- You cannot or do not want to install Visual Studio/Build Tools
+- You need a portable toolchain that doesn't include MSVC components
+- You're using a minimal development environment
+
+### Prerequisites
+
+```bash
+# 1. Install MinGW-w64 (provides x86_64-w64-mingw32-gcc)
+#    On Windows, download from https://www.mingw-w64.org/ or use:
+winget install MSYS2.MSYS2
+
+# Then run in MSYS2 UCRT64 shell:
+pacman -S mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-binutils
+
+# 2. Add MinGW bin to PATH:
+#    C:\msys64\ucrt64\mingw64\bin
+
+# 3. Install Rust GNU target:
+rustup target add x86_64-pc-windows-gnu
+```
+
+### Build with GNU toolchain
+
+```bash
+npm run package:portable:gnu
+```
+
+This uses the `x86_64-pc-windows-gnu` target and expects the MinGW-w64 GCC
+toolchain to be available on PATH.
+
+See `src-tauri/.cargo/config.toml` for linker configuration.
+
 ## Size
 
 The release profile in `src-tauri/Cargo.toml` optimizes for size: `opt-level="s"`,
@@ -65,9 +103,10 @@ trigger antivirus false positives.
 ## Options
 
 ```
-node scripts/package.mjs [--portable] [--installer] [--skip-build] [--upx]
+node scripts/package.mjs [--portable] [--installer] [--skip-build] [--upx] [--gnu]
 ```
 
+- `--gnu` uses the GNU toolchain (`x86_64-pc-windows-gnu`) instead of MSVC
 - `--skip-build` reuses the existing `src-tauri/target/release` binary instead of
   rebuilding — useful when iterating on the installer alone.
 - With neither `--portable` nor `--installer`, both deliverables are produced.

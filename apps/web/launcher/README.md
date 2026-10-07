@@ -15,7 +15,7 @@
   <img src="https://img.shields.io/badge/Rust-stable-000000?logo=rust&logoColor=white" alt="Rust" />
   <img src="https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black" alt="React 18" />
   <img src="https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white" alt="TypeScript 5" />
-  <img src="https://img.shields.io/github/package-json/v/MonoKelvin/deepseek-harness?filename=apps/web/launcher/package.json&label=version" alt="Version" />
+  <img src="https://img.shields.io/github/package-json/v/MonoKelvin/deepseek-harness?filename=apps/web/launcher/package.json&label=%E7%89%88%E6%9C%AC" alt="version" />
   <img src="https://img.shields.io/badge/license-MIT-green" alt="License: MIT" />
 </p>
 
@@ -101,6 +101,18 @@ npm run tauri:dev    # launch the full app with hot reload
 npm run tauri:build  # compile a release build (and Tauri's MSI)
 ```
 
+#### GNU Toolchain Build
+
+For building with the GNU toolchain instead of MSVC (avoids MSVC dependencies):
+
+```bash
+# Prerequisites for GNU toolchain:
+# - MinGW-w64 installed (provides x86_64-w64-mingw32-gcc)
+# - Rust GNU target: rustup target add x86_64-pc-windows-gnu
+
+npm run package:portable:gnu   # portable single-file exe with GNU toolchain
+```
+
 ### Common commands
 
 | Command | What it does |
@@ -121,6 +133,7 @@ One command produces both deliverables into `release/`:
 npm run package            # build once, then produce both
 npm run package:portable   # portable single-file exe only
 npm run package:installer  # Inno Setup installer only
+npm run package:portable:gnu   # GNU toolchain portable exe
 ```
 
 | Deliverable | Description |

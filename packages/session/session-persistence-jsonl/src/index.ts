@@ -513,17 +513,23 @@ class JsonlSessionPersistence extends SessionPersistence {
    * Permanently delete one stored session: remove its whole session directory
    * (every format generation and the write-lock node) and drop this process's
    * cold-read memo for the id. An id with no artifact resolves without work —
-   * deletion is idempotent. Refuses while a live write handle or ownership
-   * claim holds the id: removing the artifact under an active writer would let
-   * it recreate.
+   * deletion is idempotent. If a write handle or ownership claim still holds
+   * the id at delete time (e.g. an Agent that stopped without closing its
+   * handle, or a claim mid-construction), the handle is drained and released
+   * before the artifact is removed; only a failure to release the handle
+   * itself surfaces as {@link SessionAlreadyOwnedError}.
    * @param id - the stored session to delete.
    * @param options - optional cancellation.
    * @returns resolution once the directory is gone and the memo is cleared.
-   * @throws {SessionAlreadyOwnedError} when a live write handle owns the id.
+   * @throws {SessionAlreadyOwnedError} when the write handle cannot be released.
    */
   async delete(id: SessionId, options?: SessionPersistenceDeleteOptions): Promise<void> {
     options?.signal?.throwIfAborted()
-    if (this.tracker.hasActiveWriter(id)) throw new SessionAlreadyOwnedError(id)
+    // Close any stale write handle before removing the artifact. This handles
+    // sessions whose owner stopped without closing the persistence handle.
+    if (this.tracker.hasActiveWriter(id)) {
+      await this.tracker.releaseWriterBeforeDelete(id)
+    }
     await this.ensureRootEncoding()
     options?.signal?.throwIfAborted()
     const selected = await this.findLog(id, options?.signal)

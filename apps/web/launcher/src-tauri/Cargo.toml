@@ -27,6 +27,9 @@ crate-type = ["cdylib", "rlib"]
 [[bin]]
 name = "dsh-web-launcher"
 path = "src/main.rs"
+# Windows subsystem: console -> windows (suppress console window)
+# For GNU toolchain, we need to use a .rc file or link arg
+# [[bin]] needs link to windows subsystem
 
 [profile.release]
 panic = "abort"

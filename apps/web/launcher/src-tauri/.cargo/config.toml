@@ -1,0 +1,16 @@
+# For GNU toolchain builds
+# Use when building with --gnu flag instead of default MSVC
+
+[target.x86_64-pc-windows-gnu]
+linker = "x86_64-w64-mingw32-gcc"
+rustflags = [
+  "-C", "link-arg=-static-libgcc",
+  "-C", "link-arg=-static-libstdc++",
+  "-C", "link-arg=-static",
+  "-C", "link-arg=-Wl,--exclude-all-symbols",
+  "-C", "link-arg=-mwindows"
+]
+
+# For MSVC builds (default on Windows)
+[target.x86_64-pc-windows-msvc]
+linker = "link.exe"

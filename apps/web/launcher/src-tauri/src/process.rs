@@ -329,6 +329,26 @@ fn resolve_in_path(program: &str, search_path: &OsStr, extensions: &str) -> Opti
   None
 }
 
+/// On Windows, child processes spawned with GNU toolchain can show console
+/// windows. We set `CREATE_NO_WINDOW` flag to prevent this.
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// Spawn a `std::process::Command` as a `tokio::process::Child`. On Windows, uses
+/// `CREATE_NO_WINDOW` to suppress console windows for child processes.
+#[cfg(target_os = "windows")]
+fn spawn_hidden(mut cmd: std::process::Command) -> io::Result<tokio::process::Child> {
+  use std::os::windows::process::CommandExt;
+  cmd.creation_flags(CREATE_NO_WINDOW);
+  tokio::process::Command::from(cmd).spawn()
+}
+
+/// Spawn a `std::process::Command` as a `tokio::process::Child`.
+#[cfg(not(target_os = "windows"))]
+fn spawn_hidden(cmd: std::process::Command) -> io::Result<tokio::process::Child> {
+  tokio::process::Command::from(cmd).spawn()
+}
+
 /// Build the command that runs pnpm, or a localized reason pnpm cannot be located.
 ///
 /// Windows resolves bare command names through `PATHEXT`, but Rust's process
@@ -336,20 +356,24 @@ fn resolve_in_path(program: &str, search_path: &OsStr, extensions: &str) -> Opti
 /// install reports "program not found". Spawning the resolved path works because
 /// `CreateProcess` runs a batch file through `cmd.exe` and Rust escapes the
 /// arguments for it.
+///
+/// On Windows, child processes spawned with GNU toolchain can show console
+/// windows. We set `CREATE_NO_WINDOW` flag to prevent this.
 #[cfg(target_os = "windows")]
-fn pnpm_command(locale: &str) -> Result<tokio::process::Command, String> {
+fn pnpm_command(locale: &str) -> Result<String, String> {
   let search_path = std::env::var_os("PATH").unwrap_or_default();
   let extensions = std::env::var("PATHEXT").unwrap_or_else(|_| DEFAULT_PATHEXT.to_string());
   let program = resolve_in_path("pnpm", &search_path, &extensions)
     .ok_or_else(|| crate::state::t_log(locale, "pnpm.missing", &[]))?;
-  Ok(tokio::process::Command::new(program))
+
+  Ok(program.to_string_lossy().to_string())
 }
 
 /// Build the command that runs pnpm. `PATH` lookup needs no suffix handling here,
 /// so an unresolvable name surfaces as the spawn error.
 #[cfg(not(target_os = "windows"))]
-fn pnpm_command(_locale: &str) -> Result<tokio::process::Command, String> {
-  Ok(tokio::process::Command::new("pnpm"))
+fn pnpm_command(_locale: &str) -> Result<String, String> {
+  Ok("pnpm".to_string())
 }
 
 /// Stream a short-lived pnpm command into shared logs and retain its output for the result.
@@ -358,20 +382,16 @@ pub async fn run_pnpm(args: &[&str], logs: &SharedLogBuffer, settings: &crate::s
   let command = format!("pnpm {}", args.join(" "));
   append_log(logs, LogSource::Launcher, LogSeverity::Info, crate::state::t_log(&locale, "command.start", &[("command", &command)])).await;
   let root = repo_root_from_settings(settings);
-  let mut pnpm = match pnpm_command(&locale) {
+  let pnpm = match pnpm_command(&locale) {
     Ok(pnpm) => pnpm,
     Err(error) => {
       log_command_result(logs, &locale, &command, Err(&error)).await;
       return CommandOutput { success: false, stdout: String::new(), stderr: error };
     }
   };
-  let mut child = match pnpm
-    .args(args)
-    .current_dir(&root)
-    .stdout(Stdio::piped())
-    .stderr(Stdio::piped())
-    .spawn()
-  {
+  let mut cmd = std::process::Command::new(&pnpm);
+  cmd.args(args).current_dir(&root).stdout(Stdio::piped()).stderr(Stdio::piped());
+  let mut child = match spawn_hidden(cmd) {
     Ok(child) => child,
     Err(error) => {
       let error = format!("Failed to execute pnpm: {}", error);
@@ -425,20 +445,16 @@ pub async fn start_dsh_web(manager: &mut ServerManager, settings: &crate::state:
     }
   }
   append_log(&manager.logs, LogSource::Launcher, LogSeverity::Info, crate::state::t_log(&locale, "command.start", &[("command", "pnpm dsh web")])).await;
-  let mut pnpm = match pnpm_command(&locale) {
+  let pnpm = match pnpm_command(&locale) {
     Ok(pnpm) => pnpm,
     Err(error) => {
       log_command_result(&manager.logs, &locale, "pnpm dsh web", Err(&error)).await;
       return Err(error);
     }
   };
-  let mut child = match pnpm
-    .args(["dsh", "web"])
-    .current_dir(repo_root_from_settings(settings))
-    .stdout(Stdio::piped())
-    .stderr(Stdio::piped())
-    .spawn()
-  {
+  let mut cmd = std::process::Command::new(&pnpm);
+  cmd.args(["dsh", "web"]).current_dir(repo_root_from_settings(settings)).stdout(Stdio::piped()).stderr(Stdio::piped());
+  let mut child = match spawn_hidden(cmd) {
     Ok(child) => child,
     Err(error) => {
       let error = format!("Failed to start dsh web: {error}");
@@ -474,13 +490,9 @@ pub async fn start_dsh_web(manager: &mut ServerManager, settings: &crate::state:
 /// `terminate_listener`.
 #[cfg(target_os = "windows")]
 async fn terminate_process_tree(pid: u32) -> io::Result<()> {
-  tokio::process::Command::new("taskkill")
-    .args(["/F", "/T", "/PID", &pid.to_string()])
-    .stdout(Stdio::null())
-    .stderr(Stdio::null())
-    .status()
-    .await
-    .map(|_| ())
+  let mut cmd = std::process::Command::new("taskkill");
+  cmd.args(["/F", "/T", "/PID", &pid.to_string()]).stdout(Stdio::null()).stderr(Stdio::null());
+  spawn_hidden(cmd)?.wait().await.map(|_| ())
 }
 
 /// Terminate the single process `netstat` attributes a port to.
@@ -591,7 +603,9 @@ async fn await_port_released(port: u16, timeout: Duration) -> bool {
 /// Read the PIDs `netstat` attributes the listening sockets of `port` to.
 #[cfg(target_os = "windows")]
 async fn listening_owners(port: u16) -> io::Result<Vec<u32>> {
-  let output = tokio::process::Command::new("netstat").args(["-ano", "-p", "tcp"]).output().await?;
+  let mut cmd = std::process::Command::new("netstat");
+  cmd.args(["-ano", "-p", "tcp"]);
+  let output = spawn_hidden(cmd)?.wait_with_output().await?;
   let text = String::from_utf8_lossy(&output.stdout);
   let suffix = format!(":{port}");
   let mut owners = Vec::new();
