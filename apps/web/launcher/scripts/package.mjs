@@ -28,8 +28,9 @@ const releaseDir = join(projectDir, 'release')
 const builtExe = join(tauriDir, 'target', 'release', 'dsh-web-launcher.exe')
 const issFile = join(tauriDir, 'bundle', 'dsh-web-launcher.iss')
 const iconFile = join(projectDir, 'public', 'appicon.ico')
-// Repository root LICENSE (apps/web/launcher -> apps/web -> apps -> root).
-const licenseFile = join(projectDir, '..', '..', '..', 'LICENSE')
+// This launcher keeps its own LICENSE file rather than sharing the repository
+// root one, so the shipped license text can be managed here independently.
+const licenseFile = join(projectDir, 'LICENSE')
 
 const log = (message) => console.log(`[package] ${message}`)
 const rel = (p) => relative(projectDir, p) || p
