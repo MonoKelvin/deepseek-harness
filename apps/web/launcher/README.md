@@ -27,27 +27,19 @@
 
 ## 📖 What is this?
 
-`dsh web` is the DeepSeek Harness local web server, normally started from a
-terminal with `pnpm dsh web`. **DSH Web Launcher** wraps that in a small desktop
-window, so you can manage the server, install dependencies, and build the
-frontend without touching the command line.
+`dsh web` is the DeepSeek Harness local web server, normally started from a terminal with `pnpm dsh web`. **DSH Web Launcher** wraps that in a small desktop window, so you can manage the server, install dependencies, and build the frontend without touching the command line.
 
 <p align="center">
-  <img src="public/screenshot001.png" alt="DSH Web Launcher screenshot" width="520" />
+  <img src="public/screenshot-light.png" alt="DSH Web Launcher screenshot" width="520" style="border-radius:16px"/>
 </p>
+
 
 ## ✨ Features
 
-- 🟢 **One-click lifecycle** — the main button adapts to state (Start → Open →
-  Restart / Stop); Install and Build are available while the service is stopped.
-- 🔌 **External-service aware** — a server started by another program on port
-  `3080` can also be opened, restarted, or stopped (shown as *external*).
-- 📜 **Unified live log** — backend, frontend, and IPC messages stream into one
-  view; warnings and errors stay in the log (no dialogs or toasts), with Copy
-  and Clear in the toolbar.
-- ⚙️ **Persisted settings** — project directory, server port, theme, language,
-  launch-at-startup (off by default), and stop-on-exit (on by default; stops the
-  dsh service running on the configured port when the launcher quits).
+- 🟢 **One-click lifecycle** — the main button adapts to state (Start → Open → Restart / Stop); Install and Build are available while the service is stopped.
+- 🔌 **External-service aware** — a server started by another program on port `3080` can also be opened, restarted, or stopped (shown as *external*).
+- 📜 **Unified live log** — backend, frontend, and IPC messages stream into one view; warnings and errors stay in the log (no dialogs or toasts), with Copy and Clear in the toolbar.
+- ⚙️ **Persisted settings** — project directory, server port, theme, language, launch-at-startup (off by default), and stop-on-exit (on by default; stops the dsh service running on the configured port when the launcher quits).
 - 🖥️ **System tray** — closing the window hides it to the tray; quit from there.
 - 🌏 **Bilingual UI** — Simplified Chinese and English.
 
@@ -151,19 +143,15 @@ With the launcher frontend running, run the UI checks:
 npm run test:ui
 ```
 
-- Reuses `apps/web`'s Playwright dependency and **simulates** Tauri responses —
-  it does not run real install/build/start/stop operations.
+- Reuses `apps/web`'s Playwright dependency and **simulates** Tauri responses — it does not run real install/build/start/stop operations.
 - Windows uses installed Microsoft Edge; other platforms need Playwright Chromium.
 - Set `LAUNCHER_TEST_URL` to target a different frontend URL.
 - Screenshots are written to `dsh-launcher-ui` in the system temp directory.
 
 ## 💡 Notes & FAQ
 
-- **Port** — `dsh web` listens on `http://127.0.0.1:3080` by default. If yours
-  differs, set it in Settings → Server port so the launcher watches, opens, and
-  stops the right one.
-- **pnpm required** — service and dependency operations run `pnpm` in the DSH
-  project root, so pnpm must be installed and on `PATH`.
+- **Port** — `dsh web` listens on `http://127.0.0.1:3080` by default. If yours differs, set it in Settings → Server port so the launcher watches, opens, and stops the right one.
+- **pnpm required** — service and dependency operations run `pnpm` in the DSH project root, so pnpm must be installed and on `PATH`.
 
 ## 📄 License
 
