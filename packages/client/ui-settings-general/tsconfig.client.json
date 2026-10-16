@@ -24,6 +24,8 @@
     { "path": "../../api/remotes/tsconfig.client.json" },
     { "path": "../ui-sidebar" },
     { "path": "../ui-workspace" },
-    { "path": "../shortcuts/tsconfig.client.json" }
+    { "path": "../shortcuts/tsconfig.client.json" },
+    { "path": "../modules" },
+    { "path": "../ui-layout" }
   ]
 }

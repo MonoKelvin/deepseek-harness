@@ -2,7 +2,7 @@
 import type { GlobalStandardProps } from '@deepseek-ai/dsh-client-ui-slots'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { bindSnapshotSelector, RemoteError } from '@deepseek-ai/dsh-client-test-runtime'
+import { allowAllAccess, bindSnapshotSelector, RemoteError } from '@deepseek-ai/dsh-client-test-runtime'
 import type { RemoteResult } from '@deepseek-ai/dsh-api-remotes/client'
 import { DataDirectoryRow } from '../src/client/DataDirectoryRow.tsx'
 import { DataDirectoryStore } from '../src/client/data-directory-store.ts'
@@ -16,6 +16,7 @@ const unusedHook = (() => { throw new Error('unused by data-directory row') }) a
 const kit = {
   useSessions: unusedHook, useSessionStatus: unusedHook,
   usePanelInfo, useSessionRetainInfo: () => undefined, useResource, useWorkspaces: unusedHook,
+  ...allowAllAccess,
 }
 const t = ((key: string) => (en as Record<string, string>)[key] ?? key) as never
 

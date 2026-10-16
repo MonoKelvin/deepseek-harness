@@ -25,12 +25,12 @@ import { useEffect, useId, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Button, IconPlusOutlineRegular, Modal, SegmentedControl } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace, PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
-import type { SettingsNamespaceView } from '@deepseek-ai/dsh-api-remotes/client'
+import type { LlmNativeAuth, SettingsNamespaceView } from '@deepseek-ai/dsh-api-remotes/client'
 import type { SettingsSectionIntent, SettingsSectionOwnerProps } from '@deepseek-ai/dsh-client-ui-settings/client'
 // Type-only: pulls this package's SlotMap merge (the two Models child slots).
 import type {} from './slot-contract.ts'
 import { CustomProviderCard } from './CustomProviderCard.tsx'
-import { deriveKeyRef, protocolChoices, providerUsable } from './store.ts'
+import { deriveKeyRef, protocolChoices, providerUsable, reasoningLevelChoices } from './store.ts'
 import type { ModelsSettingsState, ModelsSettingsStore, ProviderRow } from './store.ts'
 import type { ModelsOperations } from './operations.ts'
 import type { SettingsSchemaOperations } from './schema-operations.ts'
@@ -96,6 +96,12 @@ interface EditorTarget extends ProviderIdentity {
   credentialRef?: string
   /** The adapter reports this route as one it does not ship (see {@link ProviderEditorProps.declared}). */
   declared?: boolean
+  /** The route's catalog endpoint (see {@link ProviderEditorProps.defaultBaseURL}). */
+  defaultBaseURL?: string
+  /** Environment used to construct an endpoint (see {@link ProviderEditorProps.baseURLEnv}). */
+  baseURLEnv?: readonly string[]
+  /** The route's native authentication (see {@link ProviderEditorProps.nativeAuth}). */
+  nativeAuth?: LlmNativeAuth
 }
 
 /** A dormant directory row the add card can adopt, with its registered namespace. */
@@ -116,16 +122,22 @@ interface ProviderEditorRenderProps extends Pick<
   'namespace' | 'schema' | 'operations' | 't' | 'readOnly' | 'onClose'
 > {
   target: EditorTarget
+  row: ProviderRow
 }
 
 /** Render an editor for either the setup posture or an expanded provider row. */
-function renderProviderEditor({ target, ...props }: ProviderEditorRenderProps): ReactNode {
+function renderProviderEditor({ target, row, ...props }: ProviderEditorRenderProps): ReactNode {
   return (
     <ProviderEditor
       provider={target.provider}
       displayName={target.displayName}
       settingsPath={target.settingsPath}
       {...target.declared === true ? { declared: true } : {}}
+      {...target.defaultBaseURL === undefined ? {} : { defaultBaseURL: target.defaultBaseURL }}
+      {...target.baseURLEnv === undefined ? {} : { baseURLEnv: target.baseURLEnv }}
+      {...target.nativeAuth === undefined ? {} : { nativeAuth: target.nativeAuth }}
+      {...row.credential === undefined ? {} : { credential: row.credential }}
+      {...row.credentialChecks === undefined ? {} : { credentialChecks: row.credentialChecks }}
       {...props}
     />
   )
@@ -204,6 +216,9 @@ function targetOf(row: ProviderRow): EditorTarget {
     ...credentialRef === undefined ? {} : { credentialRef },
     // Only declared routes may expose route-owned fields.
     ...row.entry.declared === true ? { declared: true } : {},
+    ...row.entry.defaultBaseURL === undefined ? {} : { defaultBaseURL: row.entry.defaultBaseURL },
+    ...row.entry.baseURLEnv === undefined ? {} : { baseURLEnv: row.entry.baseURLEnv },
+    ...row.entry.nativeAuth === undefined ? {} : { nativeAuth: row.entry.nativeAuth },
   }
 }
 
@@ -215,6 +230,8 @@ interface AddInputs {
   piAi: SettingsNamespaceView | undefined
   /** Protocol choices offered by the custom mode. */
   protocols: ReturnType<typeof protocolChoices>
+  /** Reasoning-level choices offered by the custom mode. */
+  reasoningLevels: ReturnType<typeof reasoningLevelChoices>
   /** Whether the catalog mode is offered (any configurable provider exists). */
   catalogOffered: boolean
   /** Whether the catalog mode has a row left to adopt. */
@@ -231,7 +248,7 @@ interface AddInputs {
  * the same join before it can pick a target).
  * @param state - the page snapshot (rows joined with namespaces and credentials).
  * @param schema - settings schema and immutable path callbacks.
- * @returns the addable rows, the custom-mode namespace and protocols, and the four offer/enable facts.
+ * @returns the addable rows, the custom-mode namespace, protocols, and reasoning levels, and the four offer/enable facts.
  */
 function addInputs(state: ModelsSettingsState, schema: SettingsSchemaOperations): AddInputs {
   const addable: AddableRow[] = state.rows.flatMap((row) => {
@@ -247,6 +264,7 @@ function addInputs(state: ModelsSettingsState, schema: SettingsSchemaOperations)
     addable,
     piAi,
     protocols,
+    reasoningLevels: reasoningLevelChoices(piAi, schema),
     catalogOffered: state.rows.some(row => state.namespaces.has(row.entry.settingsNs)),
     catalogEnabled: addable.length > 0,
     customOffered: piAi !== undefined,
@@ -298,6 +316,10 @@ function Loaded({ injected, renderSlot, intent, onIntentHandled }: {
   const state = { ...snapshot, rows: snapshot.rows.map(row => row.entry.provider === 'deepseek-account'
     ? { ...row, entry: { ...row.entry, displayName: t('deepSeekAccount') } } : row) }
   const add = addInputs(state, schema)
+  /** A new or failed surface waits for a current snapshot; background refreshes preserve its drafts. */
+  const [hasReadySnapshot, setHasReadySnapshot] = useState(state.status === 'ready')
+  if (state.status === 'ready' && !hasReadySnapshot) setHasReadySnapshot(true)
+  if (state.status === 'error' && hasReadySnapshot) setHasReadySnapshot(false)
   const [editing, setEditing] = useState<EditorTarget | undefined>(undefined)
   const [addOpen, setAddOpen] = useState(false)
   const [addMode, setAddMode] = useState<AddMode>('catalog')
@@ -376,9 +398,11 @@ function Loaded({ injected, renderSlot, intent, onIntentHandled }: {
 
   /**
    * Open the add card the way the entry button does: one mode, one target,
-   * and both panels mounted as their modes are visited.
+   * and both panels mounted as their modes are visited. A snapshot that is
+   * not ready leaves the card closed.
    */
   const openAddCard = (): void => {
+    if (controller.store.getSnapshot().status !== 'ready') return
     const first = add.addable[0]
     const initial: AddMode = add.catalogEnabled ? 'catalog' : 'custom'
     setSavedTarget(undefined)
@@ -400,6 +424,7 @@ function Loaded({ injected, renderSlot, intent, onIntentHandled }: {
     }
     if (handledIntent.current === intent) return
     if (!add.catalogOffered && !add.customOffered) return
+    if (controller.store.getSnapshot().status !== 'ready') return
     handledIntent.current = intent
     openAddCard()
     onIntentHandled?.()
@@ -415,6 +440,14 @@ function Loaded({ injected, renderSlot, intent, onIntentHandled }: {
         <button type="button" className={styles['secondaryButton']} onClick={() => { void controller.load() }}>
           {t('retry')}
         </button>
+      </div>
+    )
+  }
+  if (!hasReadySnapshot && state.status !== 'ready') {
+    return (
+      <div className={styles['section']}>
+        <h2 className={styles['title']}>{t('title')}</h2>
+        <p className={styles['intro']}>{t('intro')}</p>
       </div>
     )
   }
@@ -440,7 +473,7 @@ function Loaded({ injected, renderSlot, intent, onIntentHandled }: {
   // the shown mode or has been shown since the card opened — derived, so a
   // refresh that changes which modes are offered can never leave the card
   // without a panel.
-  const { addable, piAi, protocols, catalogOffered, catalogEnabled, customOffered, customEnabled } = add
+  const { addable, piAi, protocols, reasoningLevels, catalogOffered, catalogEnabled, customOffered, customEnabled } = add
   const bothOffered = catalogOffered && customOffered
   const mode: AddMode = bothOffered ? addMode : customOffered ? 'custom' : 'catalog'
   const mounted = (candidate: AddMode): boolean => mode === candidate || visited.has(candidate)
@@ -493,6 +526,7 @@ function Loaded({ injected, renderSlot, intent, onIntentHandled }: {
                 {error}
                 {renderProviderEditor({
                   target,
+                  row,
                   namespace,
                   schema,
                   operations,
@@ -524,6 +558,15 @@ function Loaded({ injected, renderSlot, intent, onIntentHandled }: {
                   {row.entry.declared === true
                     ? <span className={styles['rowTag']}>{t('customTag')}</span>
                     : null}
+                  {/* The store keeps the account row only while the account lists models. */}
+                  {row.entry.provider === 'deepseek-account'
+                    ? (
+                      <span className={styles['accountStatus']}>
+                        <span className={`${styles['credentialDot']} ${styles['credentialDotConfigured']}`} aria-hidden="true" />
+                        {t('accountSignedIn')}
+                      </span>
+                    )
+                    : null}
                   {credentialConfigured
                     ? (
                       <span
@@ -545,29 +588,37 @@ function Loaded({ injected, renderSlot, intent, onIntentHandled }: {
                       : null}
                 </span>
                 <span className={styles['rowActions']}>
-                  <button
-                    type="button"
-                    className={styles['secondaryButton']}
-                    aria-label={providerCopy(t('editProvider'), target)}
-                    onClick={() => {
-                      setSavedTarget(undefined)
-                      // One card at a time: the add card closes with whatever
-                      // it held, since closing either card would otherwise
-                      // discard the other's draft.
-                      setAddOpen(false)
-                      setEditing(open ? undefined : target)
-                    }}
-                  >
-                    {t('edit')}
-                  </button>
+                  {/* The account catalog comes from the account listing; its model overrides live in cordis.patch.yml. */}
+                  {row.entry.provider === 'deepseek-account'
+                    ? null
+                    : (
+                      <button
+                        type="button"
+                        className={styles['secondaryButton']}
+                        aria-label={providerCopy(t('editProvider'), target)}
+                        disabled={!open && state.status !== 'ready'}
+                        onClick={() => {
+                          if (!open && controller.store.getSnapshot().status !== 'ready') return
+                          setSavedTarget(undefined)
+                          // One card at a time: the add card closes with whatever
+                          // it held, since closing either card would otherwise
+                          // discard the other's draft.
+                          setAddOpen(false)
+                          setEditing(open ? undefined : target)
+                        }}
+                      >
+                        {t('edit')}
+                      </button>
+                    )}
                   {row.removable
                     ? (
                       <button
                         type="button"
                         className={styles['dangerButton']}
                         aria-label={providerCopy(t('removeProvider'), target)}
-                        disabled={!state.writable}
+                        disabled={!state.writable || state.status !== 'ready'}
                         onClick={() => {
+                          if (controller.store.getSnapshot().status !== 'ready') return
                           setSavedTarget(undefined)
                           setDeleteFailure(undefined)
                           setDeleteTarget(target)
@@ -588,6 +639,7 @@ function Loaded({ injected, renderSlot, intent, onIntentHandled }: {
               {open
                 ? renderProviderEditor({
                   target,
+                  row,
                   namespace,
                   schema,
                   operations,
@@ -679,6 +731,10 @@ function Loaded({ injected, renderSlot, intent, onIntentHandled }: {
                       schema={schema}
                       settingsPath={draft.target.settingsPath}
                       operations={operations}
+                      {...draft.target.defaultBaseURL === undefined ? {} : { defaultBaseURL: draft.target.defaultBaseURL }}
+                      {...draft.target.baseURLEnv === undefined ? {} : { baseURLEnv: draft.target.baseURLEnv }}
+                      {...draft.target.nativeAuth === undefined ? {} : { nativeAuth: draft.target.nativeAuth }}
+                      {...addRow?.credentialChecks === undefined ? {} : { credentialChecks: addRow.credentialChecks }}
                       t={t}
                       readOnly={!state.writable}
                       onClose={(changed) => { closeEditor(changed, draft.target) }}
@@ -705,6 +761,7 @@ function Loaded({ injected, renderSlot, intent, onIntentHandled }: {
                     <CustomProviderCard
                       taken={state.rows.map(row => row.entry.provider)}
                       protocols={protocols}
+                      reasoningLevels={reasoningLevels}
                       revision={piAi.revision}
                       operations={operations}
                       t={t}
@@ -728,7 +785,7 @@ function Loaded({ injected, renderSlot, intent, onIntentHandled }: {
                 <button
                   type="button"
                   className={styles['addButton']}
-                  disabled={!state.writable || (!catalogEnabled && !customEnabled)}
+                  disabled={!state.writable || state.status !== 'ready' || (!catalogEnabled && !customEnabled)}
                   onClick={openAddCard}
                 >
                   <IconPlusOutlineRegular size={14} />
