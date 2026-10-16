@@ -604,7 +604,7 @@ async fn await_port_released(port: u16, timeout: Duration) -> bool {
 #[cfg(target_os = "windows")]
 async fn listening_owners(port: u16) -> io::Result<Vec<u32>> {
   let mut cmd = std::process::Command::new("netstat");
-  cmd.args(["-ano", "-p", "tcp"]);
+  cmd.args(["-ano", "-p", "tcp"]).stdout(Stdio::piped()).stderr(Stdio::null());
   let output = spawn_hidden(cmd)?.wait_with_output().await?;
   let text = String::from_utf8_lossy(&output.stdout);
   let suffix = format!(":{port}");
