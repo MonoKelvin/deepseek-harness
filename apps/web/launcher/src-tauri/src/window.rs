@@ -74,12 +74,15 @@ pub fn configure(window: &Window) -> Result<(), Box<dyn std::error::Error>> {
   let hwnd = HWND(window.hwnd()?.0);
   let corner_preference = DWMWCP_DONOTROUND;
   unsafe {
-    DwmSetWindowAttribute(
+    // Windows 10 predates the DWM corner-preference API and answers with
+    // ERROR_INVALID_PARAMETER (0x80070057); the CSS corners already cover that
+    // case, so a rejection here must not abort window setup.
+    let _ = DwmSetWindowAttribute(
       hwnd,
       DWMWA_WINDOW_CORNER_PREFERENCE,
       std::ptr::from_ref(&corner_preference).cast(),
       size_of_val(&corner_preference) as u32,
-    )?;
+    );
     let _ = SetWindowSubclass(hwnd, Some(gutter_passthrough), 1, 0);
   }
   Ok(())
