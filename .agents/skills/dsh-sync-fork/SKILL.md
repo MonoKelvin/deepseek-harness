@@ -89,6 +89,55 @@ git commit --no-verify --no-edit -m "Merge upstream/master into master
 
 Confirm `master` is `0` behind upstream (`git rev-list --left-right --count master...upstream/master` → right side `0`). Do NOT push unless the user asks; pushing to `master` needs explicit confirmation.
 
+## 8. Post-merge summary (REQUIRED)
+
+After the merge is complete and pushed, ALWAYS provide a structured summary in the final response:
+
+### Fork-only commits analysis
+List the fork-only commits by category with counts and purposes:
+
+```sh
+git log --oneline upstream/master..master | ForEach-Object { $commit = $_ -split ' ', 2; "$($commit[0]) | $($commit[1])" }
+```
+
+Group by pattern:
+- **Launcher features** (`web-launcher`, `apps/web/launcher`): Tauri GUI, tray app, packaging, UI polish
+- **Client features** (`ui-*`, `packages/client`): model selection, chat enhancements, settings
+- **Session/Workspace**: data directory, session deletion, persistence fixes
+- **Build/Scripts**: verification scripts, toolchain support
+- **Documentation**: release notes, READMEs, i18n
+
+### Upstream changes summary
+Summarize what the upstream brought (from `git log upstream/master --oneline` since last sync):
+- Major version bumps and breaking changes
+- New features or capabilities
+- Architecture changes
+- Package renames or moves
+
+### Conflict resolution log
+For each conflicted file, record:
+- **File path**
+- **Fork intent**: what the fork was trying to do
+- **Upstream intent**: what upstream changed
+- **Resolution**: how you merged them (union, prefer-fork, prefer-upstream, custom)
+- **Rationale**: why this resolution preserves both intents
+
+### Verification results
+- Typecheck status (all gates pass/fail)
+- Any manual checks run
+- Known issues or follow-ups
+
+## 9. Update this skill with new learnings
+
+After completing a sync, if you encountered new conflict patterns, hot spots, or gotchas not covered above, ADD them to the relevant section:
+
+- New conflict file patterns → add to step 3 (Merge and resolve conflicts)
+- New package-specific rules → add to step 3 hotspots
+- New verification requirements → add to step 6
+- New proxy/toolchain issues → add to step 0
+
+Keep entries concise: one line per pattern, with the exact command or file path.
+
 ## Attribution
 
 End the commit message with the `Co-Authored-By:` line the session's active attribution reminder specifies.
