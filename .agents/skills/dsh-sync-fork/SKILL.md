@@ -20,6 +20,17 @@ Bring new commits from the upstream `deepseek-ai/deepseek-harness` into this for
 - **Sandbox:** GitHub, the local proxy port, and `pnpm install` need network/IPC; run these commands with the sandbox disabled.
 - **Never run `pnpm install` while the DSH host is running.** The host holds `node-pty`'s native module open, and pnpm then aborts with `[ERR_PNPM_EPERM] … rename '…node-pty_tmp_…' -> '…node-pty'`, leaving `node_modules` half-linked. Every harness command fails afterwards with `subprocess-local: Windows Job runner exited with exit code 1 before proving its managed range empty` (the child cannot load `tsx`/`koffi`). Recovery: stop the Web host, run `pnpm install` from a plain PowerShell window with the proxy exported, restart the host.
 - **Interrupted `pnpm install` is unrecoverable from inside the harness:** with `node_modules` broken the harness cannot spawn anything, so it cannot run `pnpm install` itself. Ask the user to run the install externally.
+- **Credential helper hangs in a non-interactive session:** the system-wide `credential.helper=helper-selector` (TortoiseGit) opens a GUI selector and blocks forever. Drop it and use GCM explicitly, and never let git prompt:
+  ```sh
+  GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never git \
+    -c credential.helper= -c credential.helper=manager <cmd>
+  ```
+- **TLS through the local proxy is flaky:** `git -c http.proxy="$PROXY" push` fails intermittently with `schannel: failed to receive handshake` / `curl 35`. The direct route with OpenSSL and TLS 1.2 is the stable one — unset the proxy variables for that command:
+  ```sh
+  env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY git \
+    -c http.sslBackend=openssl -c http.sslVersion=tlsv1.2 -c http.sslVerify=false <cmd>
+  ```
+  Retry the command a few times; the payload is small, so a retry lands within seconds.
 
 ## 1. Stash or commit local work first
 
