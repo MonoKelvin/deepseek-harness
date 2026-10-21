@@ -18,10 +18,48 @@ Bring new commits from the upstream `deepseek-ai/deepseek-harness` into this for
   Also export `https_proxy=$PROXY http_proxy=$PROXY` for `pnpm`/`npx` steps.
 - **Pre-commit hooks crash here:** lefthook spawns `sh.exe`, and msys fails with `NtCreateDirectoryObject … 0xC0000022` (an environment fork fault, NOT a lint failure). Commit with `--no-verify` and run the equivalent checks manually (this skill does). CI still runs the full gate set.
 - **Sandbox:** GitHub, the local proxy port, and `pnpm install` need network/IPC; run these commands with the sandbox disabled.
+- **Never run `pnpm install` while the DSH host is running.** The host holds `node-pty`'s native module open, and pnpm then aborts with `[ERR_PNPM_EPERM] … rename '…node-pty_tmp_…' -> '…node-pty'`, leaving `node_modules` half-linked. Every harness command fails afterwards with `subprocess-local: Windows Job runner exited with exit code 1 before proving its managed range empty` (the child cannot load `tsx`/`koffi`). Recovery: stop the Web host, run `pnpm install` from a plain PowerShell window with the proxy exported, restart the host.
+- **Interrupted `pnpm install` is unrecoverable from inside the harness:** with `node_modules` broken the harness cannot spawn anything, so it cannot run `pnpm install` itself. Ask the user to run the install externally.
 
 ## 1. Stash or commit local work first
 
 Never merge onto a dirty tree. Ask the user whether to commit or stash; default to committing so the merge stays traceable and reversible. Commit with `--no-verify` (see step 0) after a manual typecheck of the changed package.
+
+## 1a. Keep the fork's source tree upstream-identical
+
+The fork ships exactly two differences from upstream: the Tauri launcher (`apps/web/launcher/`) and this skill. Every other product feature lives in an external plugin under `E:\Project\DSH-Data\plugins`, so upstream merges never conflict.
+
+Before merging, move any fork-only product code out of the repository:
+
+```sh
+git diff --name-only upstream/master...master   # every fork difference
+git checkout upstream/master -- <upstream-shared paths>   # restore upstream content
+git rm -- <fork-only paths>                            # delete files upstream does not have
+```
+
+The tree is upstream-identical when this prints nothing:
+
+```sh
+git diff --name-only upstream/master | grep -v '^apps/web/launcher/' | grep -v '^\.agents/skills/dsh-sync-fork/'
+```
+
+A feature that a plugin cannot reach on its own has no home in the repository either: session deletion needs `SessionPersistence.delete()` and `WorkspaceRegistry.deleteSession()`, and the harness exposes neither to a plugin. Upstream owns that surface, so the fork drops the feature rather than patching upstream for it.
+
+## 1b. Wire an external plugin into the profile
+
+A plugin outside the repository is a profile bundle. Three steps, no package install (the running host locks `node-pty`, so `pnpm install` would fail — step 0):
+
+```sh
+# 1. Link the package into the profile's node_modules (Windows junction)
+New-Item -ItemType Junction -Path "$env:DSH_HOME\profiles\web\node_modules\@scope\dsh-plugin" `
+  -Target "E:\Project\DSH-Data\plugins\dsh-plugin"
+# 2. Declare it in the profile manifest: "dsh".profile.bundles += "@scope/dsh-plugin"
+#    and "dependencies" += { "@scope/dsh-plugin": "link:E:/…/dsh-plugin" }
+```
+
+Package manifest shape: `"dsh": { "bundle": { "patch": "./cordis.patch.yml" }, "client": { "platform": "web", "immediately": true, "inject": [...] } }`; the patch file inserts the host entry (`- insert: [{ id, name }]`). The client half bundles to `window.__ModuleLoader__.load({ id, factory: function (require) {…} })` (esbuild, `react` external) and reaches the host through the harness `webServer` service: `ctx.inject(['webServer'], scope => scope.effect(() => scope.webServer.register({ kind: 'prefix', path, handler })))`.
+
+The launcher resolves the recorded data home before the harness does: `apps/web/launcher/src-tauri/src/data_home.rs` reads `~/.dsh/.data-location` and exports `DSH_HOME` to the spawned `pnpm dsh web`, and removes the directory recorded in `~/.dsh/.data-cleanup` once the pointer confirms the move.
 
 ## 2. Fetch and assess divergence
 
@@ -46,6 +84,7 @@ Resolve each by intent, not by picking a side blindly. Recurring hotspots and th
 - **Locale dictionaries (`*/locales.ts`):** keep the fork's new keys AND take upstream's changed values for shared keys; keep zh and en in lockstep.
 - **Bilingual READMEs + `README.i18n.yaml`:** merge the prose (do not drop the fork's feature sentences), then REGENERATE the pairing hashes (step 5) — never hand-edit the hashes.
 - **`pnpm-lock.yaml`:** do not hand-merge. `git checkout --theirs pnpm-lock.yaml`, then reconcile in step 4.
+- **Reverted fork packages:** a file that step 1a restored to upstream can still appear as a conflict. Take upstream's version outright (`git checkout --ours` is wrong here — after a revert the "ours" side is the upstream content) and confirm `git diff upstream/master --stat` lists only the launcher and this skill.
 
 ## 4. Reconcile the lockfile with the merged manifests
 
@@ -106,6 +145,8 @@ Group by pattern:
 - **Session/Workspace**: data directory, session deletion, persistence fixes
 - **Build/Scripts**: verification scripts, toolchain support
 - **Documentation**: release notes, READMEs, i18n
+
+State which of those groups now live in an external plugin under `E:\Project\DSH-Data\plugins` instead of the repository, and which were dropped because no plugin can reach the upstream surface they need.
 
 ### Upstream changes summary
 Summarize what the upstream brought (from `git log upstream/master --oneline` since last sync):

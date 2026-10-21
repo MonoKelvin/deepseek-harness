@@ -29,7 +29,6 @@ import type {
 } from './shell-contract.ts'
 import type { ShortcutCommandId } from '@deepseek-ai/dsh-client-shortcuts/client'
 import { createSettingsShellStore } from './shell-store.ts'
-import { SettingsNavigationService } from './settings-navigation.ts'
 import { SettingsRoot } from './SettingsRoot.tsx'
 import { DesktopUpdateBadge } from './DesktopUpdateIndicator.tsx'
 import type { DesktopUpdateBridge } from '../types.ts'
@@ -38,8 +37,6 @@ import { CloseLabel, HeaderContent, TriggerContent } from './chrome.tsx'
 import { GeneralSection } from './GeneralSection.tsx'
 import { CurrentVersionRow } from './CurrentVersionRow.tsx'
 import { DeveloperToolsRow, type DeveloperToolsRowInjected } from './DeveloperToolsRow.tsx'
-import { DataDirectoryRow, type DataDirectoryRowInjected } from './DataDirectoryRow.tsx'
-import { DataDirectoryStore } from './data-directory-store.ts'
 import { SettingsDocumentAction } from './SettingsDocumentAction.tsx'
 import type { SettingsDocumentActionInjected } from './SettingsDocumentAction.tsx'
 import { SettingsDocumentStore } from './settings-document-store.ts'
@@ -55,9 +52,6 @@ export type {
 export type { SettingsDocumentActionInjected, SettingsDocumentActionProps } from './SettingsDocumentAction.tsx'
 export type { SettingsDocumentState } from './settings-document-store.ts'
 export { SettingsDocumentStore } from './settings-document-store.ts'
-export type { DataDirectoryRowInjected, DataDirectoryRowProps } from './DataDirectoryRow.tsx'
-export type { DataDirectoryState, DataDirectoryError } from './data-directory-store.ts'
-export { DataDirectoryStore } from './data-directory-store.ts'
 export type { SettingsKey } from './locales.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
@@ -90,19 +84,7 @@ export function apply(ctx: ClientContext): void {
       setEnabled: enabled => ctx.configForms.developerTools.setEnabled(enabled),
     }),
   }, DeveloperToolsRow))
-  // Data-directory relocation is a native Host filesystem action; expose it
-  // only on a loopback page, matching the local-document action policy.
-  if (ctx.remote.$host.isLoopback) {
-    const dataDirectory = new DataDirectoryStore(ctx)
-    ctx.slots.inject('settings.general.item', () => ctx.slots.register({
-      name: 'settings.general.item', id: 'data-directory', order: 50, locale: NS,
-      inject: (): DataDirectoryRowInjected => ({
-        controller: dataDirectory,
-        hooks: { snapshot: dataDirectory.store },
-      }),
-    }, DataDirectoryRow))
-  }
-  // Version information follows the core preferences and data-directory row.
+  // Version information follows the core preferences.
   ctx.slots.inject('settings.general.item', () => ctx.slots.register({
     name: 'settings.general.item', id: 'current-version', order: 100, locale: NS,
   }, CurrentVersionRow))
@@ -194,15 +176,10 @@ export function apply(ctx: ClientContext): void {
       },
     },
   })
-  // One store instance for the shell and the cross-plugin navigation entry:
-  // the shell renders it, and SettingsNavigationService writes through the
-  // same instance, so any surface in the product opens the same panel.
-  const shellHandle = createSettingsShellStore()
-  const shellInstance = shellHandle.create()
-  const shellStore: typeof shellHandle = { ...shellHandle, create: () => shellInstance }
-  new SettingsNavigationService(ctx, shellInstance.actions)
-
   ctx.slots.inject('sidebar.settings', () => {
+    const shellHandle = createSettingsShellStore()
+    const shellInstance = shellHandle.create()
+    const shellStore: typeof shellHandle = { ...shellHandle, create: () => shellInstance }
     const disposeCommand = ctx.shortcuts.register({
       id: 'settings.open' as ShortcutCommandId, label: () => t('shortcut.open'), aliases: ['settings', 'preferences'],
       defaults: {

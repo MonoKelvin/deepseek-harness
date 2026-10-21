@@ -53,21 +53,17 @@ async function bench(runtime: 'web' | 'desktop' = 'desktop', platform: ShortcutP
   const navigation = {
     startSession: vi.fn(), forkSession: vi.fn(async () => 'fork-child' as SessionId), archiveSession: vi.fn(async (_sessionId: SessionId) => {}),
   }
-  const requestSessionDelete = vi.fn((_sessionId: SessionId) => {})
   const controls = createWorkspaceShortcutControls()
   const reportForkFailure = vi.fn()
   const fiber = ctx.plugin((scoped) => {
     installWorkspaceShortcuts(scoped, navigation, controls,
-      (id) => { void navigation.archiveSession(id) }, reportForkFailure, requestSessionDelete)
+      (id) => { void navigation.archiveSession(id) }, reportForkFailure)
   })
   await fiber.await()
   const select = (id: string) => { list.set({ ...list.getSnapshot(), byId: {
     [sid('a')]: row('a', id === 'a'), [sid('b')]: row('b', id === 'b'),
   } }) }
-  return {
-    ctx, fiber, registry, commands, navigation, requestSessionDelete, controls, reportForkFailure,
-    list, directory, select, history, loadOlder, panelInfo,
-  }
+  return { ctx, fiber, registry, commands, navigation, controls, reportForkFailure, list, directory, select, history, loadOlder, panelInfo }
 }
 
 afterEach(() => { vi.restoreAllMocks() })
@@ -83,15 +79,15 @@ describe('workspace shortcut ownership', () => {
     b.controls.add()
     expect(b.controls.state.getSnapshot().addRequested).toBe(false)
   })
-  it('registers seven commands with Desktop and Web defaults and removes registrations with the plugin', async () => {
+  it('registers six commands with Desktop and Web defaults and removes registrations with the plugin', async () => {
     const b = await bench()
     expect(b.registry.catalog.getSnapshot().map(row => row.id)).toEqual([
-      'session.new', 'session.search', 'workspace.add', 'session.rename', 'session.fork', 'session.archive', 'session.delete',
+      'session.new', 'session.search', 'workspace.add', 'session.rename', 'session.fork', 'session.archive',
     ])
     expect(b.registry.catalog.getSnapshot().every(row => row.keys.length > 0)).toBe(true)
     const web = await bench('web')
     expect(web.registry.catalog.getSnapshot().map(row => row.aria)).toEqual([
-      'Alt+Meta+N', 'Alt+Meta+K', 'Alt+Meta+O', 'Alt+Meta+G', 'Shift+Meta+F', 'Alt+Meta+A', 'Shift+Meta+D',
+      'Alt+Meta+N', 'Alt+Meta+K', 'Alt+Meta+O', 'Alt+Meta+G', 'Shift+Meta+F', 'Alt+Meta+A',
     ])
     await b.fiber.dispose()
     expect(b.registry.catalog.getSnapshot()).toEqual([])
@@ -164,18 +160,6 @@ describe('workspace shortcut ownership', () => {
     }
     expect(b.controls.state.getSnapshot().renameTarget).toEqual({ sessionId: 'a', currentTitle: 'a' })
     expect(b.navigation.archiveSession).toHaveBeenCalledWith('a')
-  })
-
-  it('raises the delete confirmation for the selected Session and blocks without one', async () => {
-    const b = await bench()
-    b.select('none')
-    expect(b.commands.get('session.delete')!.resolve(context))
-      .toMatchObject({ status: 'blocked', reason: en['shortcut.noSession'] })
-    b.select('a')
-    const resolution = b.commands.get('session.delete')!.resolve(context)
-    expect(resolution.status).toBe('handled')
-    if (resolution.status === 'handled') resolution.run()
-    expect(b.requestSessionDelete).toHaveBeenCalledWith('a')
   })
 
   it('leaves loaded history unchanged when commands mount, Sessions change, or Fork runs', async () => {

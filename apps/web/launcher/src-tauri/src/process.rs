@@ -452,8 +452,14 @@ pub async fn start_dsh_web(manager: &mut ServerManager, settings: &crate::state:
       return Err(error);
     }
   };
+  // A completed migration left the previous data directory for cleanup, and the
+  // pointer file names where the harness home now lives.
+  crate::data_home::run_pending_cleanup();
   let mut cmd = std::process::Command::new(&pnpm);
   cmd.args(["dsh", "web"]).current_dir(repo_root_from_settings(settings)).stdout(Stdio::piped()).stderr(Stdio::piped());
+  if let Some(home) = crate::data_home::data_home() {
+    cmd.env("DSH_HOME", home);
+  }
   let mut child = match spawn_hidden(cmd) {
     Ok(child) => child,
     Err(error) => {

@@ -54,7 +54,6 @@ export function createWorkspaceShortcutControls(): WorkspaceShortcutControls {
  * @param controls - browser-owned opening requests.
  * @param archiveSession - shared archive action, including running-work confirmation and notices.
  * @param reportForkFailure - publish a classified failure through the frame-wide notice channel.
- * @param requestSessionDelete - shared delete action: raises the irreversible delete confirmation for a session.
  */
 export function installWorkspaceShortcuts(
   ctx: Context,
@@ -62,7 +61,6 @@ export function installWorkspaceShortcuts(
   controls: ReturnType<typeof createWorkspaceShortcutControls>,
   archiveSession: (sessionId: SessionId) => void,
   reportForkFailure: (reason: 'unavailable' | 'failed') => void,
-  requestSessionDelete: (sessionId: SessionId) => void,
 ): void {
   const t = ctx.locale.bind('workspace')
   const current = () => Object.values(ctx.sessions.list.getSnapshot().byId)
@@ -115,13 +113,6 @@ export function installWorkspaceShortcuts(
     return target === undefined ? { status: 'blocked', reason: t('shortcut.noSession') }
       : { status: 'handled', run: () => {
         archiveSession(target.id)
-      } }
-  })
-  register('session.delete', () => t('menu.deleteSession'), ['delete session'], 'KeyD', ['primary', 'shift'], ['primary', 'shift'], () => {
-    const target = current()
-    return target === undefined ? { status: 'blocked', reason: t('shortcut.noSession') }
-      : { status: 'handled', run: () => {
-        requestSessionDelete(target.id)
       } }
   })
 }

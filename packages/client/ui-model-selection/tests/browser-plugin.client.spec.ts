@@ -155,8 +155,6 @@ async function bench(locale: 'zh' | 'en' = 'zh') {
   })
   const track = vi.fn()
   ctx.provide('productAnalytics', { enabled: true, track } as never)
-  const openSettingsSection = vi.fn()
-  ctx.provide('settingsNavigation', { open: openSettingsSection })
   const fiber = ctx.plugin({ inject: [...inject], apply })
   await fiber.await()
   await ctx.plugin(function probe() {}).await()
@@ -181,7 +179,7 @@ async function bench(locale: 'zh' | 'en' = 'zh') {
     return { ...handle, projection }
   }
   return {
-    ctx, fiber, mint, calls, remote, track, openSettingsSection,
+    ctx, fiber, mint, calls, remote, track,
     contribution: () => contribution!,
     popup: (): PopupSelectSpec => {
       const ui = contribution!.ui
@@ -225,14 +223,6 @@ describe('ui-model-selection dual entry', () => {
     expect(b.seat().inject).toBeTypeOf('function')
     // Copy rides the standard locale seat.
     expect(b.seat().locale).toBe('model')
-  })
-
-  it('hands the seat\'s add-custom-model entry off to the Settings models section', async () => {
-    const b = await bench()
-    b.mint('s1')
-    const face = b.seat().inject!(sid('s1'))
-    face.openAddModel()
-    expect(b.openSettingsSection).toHaveBeenCalledExactlyOnceWith('models', 'models.add-provider')
   })
 
   it.each(['zh', 'en'] as const)('shows names and providers without catalog descriptions (%s)', async (locale) => {

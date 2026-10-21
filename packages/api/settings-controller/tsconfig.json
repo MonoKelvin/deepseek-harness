@@ -27,9 +27,6 @@
       "path": "../../util/native-command"
     },
     {
-      "path": "../../util/home-paths"
-    },
-    {
       "path": "../../settings/settings"
     },
     {

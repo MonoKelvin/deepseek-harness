@@ -23,12 +23,11 @@ import pLimit, { type LimitFunction } from 'p-limit'
 import {
   SessionPersistence, SessionPersistenceRevision, SessionFormatUnsupportedError,
   SessionPersistenceCorruptionError,
-  SessionAlreadyExistsError, SessionAlreadyOwnedError, SessionPersistenceNotFoundError,
+  SessionAlreadyExistsError, SessionPersistenceNotFoundError,
   assertStoredId, materializeCreateHeader, sessionFormatVersionRefusal, validateStoredEvents,
   type SessionAccess, type SessionHandle,
   type SessionHandleReadResult,
   type SessionLocation, type SessionPersistenceCreateOptions,
-  type SessionPersistenceDeleteOptions,
   type SessionPersistenceListOptions, type SessionPersistenceOpenOptions,
   type SessionPersistenceSnapshot, type SessionPersistenceStatOptions,
   type SessionPersistenceRevision as PersistenceRevision,
@@ -560,40 +559,6 @@ class JsonlSessionPersistence extends SessionPersistence {
     }
     signal?.throwIfAborted()
     return snapshots
-  }
-
-  /**
-   * Permanently delete one stored session: remove its whole session directory
-   * (every format generation and the write-lock node) and drop this process's
-   * cold-read memo for the id. An id with no artifact resolves without work —
-   * deletion is idempotent. If a write handle or ownership claim still holds
-   * the id at delete time (e.g. an Agent that stopped without closing its
-   * handle, or a claim mid-construction), the handle is drained and released
-   * before the artifact is removed; only a failure to release the handle
-   * itself surfaces as {@link SessionAlreadyOwnedError}.
-   * @param id - the stored session to delete.
-   * @param options - optional cancellation.
-   * @returns resolution once the directory is gone and the memo is cleared.
-   * @throws {SessionAlreadyOwnedError} when the write handle cannot be released.
-   */
-  async delete(id: SessionId, options?: SessionPersistenceDeleteOptions): Promise<void> {
-    options?.signal?.throwIfAborted()
-    // Close any stale write handle before removing the artifact. This handles
-    // sessions whose owner stopped without closing the persistence handle.
-    if (this.tracker.hasActiveWriter(id)) {
-      await this.tracker.releaseWriterBeforeDelete(id)
-    }
-    await this.ensureRootEncoding()
-    options?.signal?.throwIfAborted()
-    const selected = await this.findLog(id, options?.signal)
-    options?.signal?.throwIfAborted()
-    if (selected !== undefined) {
-      // Every generation and the lock node live under the one session
-      // directory (format.sessionDir), so removing it recursively erases the
-      // session's whole physical footprint in one step.
-      await rm(dirname(selected.sourcePath), { recursive: true, force: true })
-    }
-    this.coldLogMemo.delete(id)
   }
 
   // --- handle-facing storage internals (package-private via the handle class below) ---

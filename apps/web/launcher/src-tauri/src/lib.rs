@@ -103,6 +103,7 @@ use process::{
 };
 use state::{save_settings, AppSettings, SharedSettings};
 
+mod data_home;
 mod process;
 mod state;
 #[cfg(target_os = "windows")]

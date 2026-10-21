@@ -180,7 +180,6 @@ class FakeWorkspaces implements IWorkspaces {
   readonly list: MutableSource<WorkspaceSnapshot>
   readonly archiveCalls: SessionId[] = []
   readonly unarchiveCalls: SessionId[] = []
-  readonly deleteCalls: SessionId[] = []
   onArchive: IWorkspaces['archiveSession'] = async (sessionId) => {
     this.list.update(state => ({
       ...state,
@@ -192,14 +191,6 @@ class FakeWorkspaces implements IWorkspaces {
     this.list.update(state => ({
       ...state,
       archivedSessionIds: state.archivedSessionIds.filter(id => id !== sessionId),
-    }))
-  }
-
-  onDeleteSession: IWorkspaces['deleteSession'] = async (sessionId) => {
-    this.list.update(state => ({
-      ...state,
-      archivedSessionIds: state.archivedSessionIds.filter(id => id !== sessionId),
-      pinnedSessionIds: state.pinnedSessionIds.filter(id => id !== sessionId),
     }))
   }
 
@@ -229,11 +220,6 @@ class FakeWorkspaces implements IWorkspaces {
   unarchiveSession(sessionId: SessionId): Promise<void> {
     this.unarchiveCalls.push(sessionId)
     return this.onUnarchive(sessionId)
-  }
-
-  deleteSession(sessionId: SessionId): Promise<void> {
-    this.deleteCalls.push(sessionId)
-    return this.onDeleteSession(sessionId)
   }
 
   pinSession(sessionId: SessionId): Promise<void> {

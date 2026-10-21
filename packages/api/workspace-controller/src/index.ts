@@ -17,8 +17,6 @@ import type {
   WorkspaceCreateValue,
   WorkspaceDeleteRequest,
   WorkspaceDeleteValue,
-  WorkspaceDeleteSessionRequest,
-  WorkspaceDeleteSessionValue,
   WorkspaceFollowFrame,
   WorkspaceId,
   WorkspaceInsertBeforeRequest,
@@ -171,17 +169,6 @@ export class WorkspaceController extends TypertRemoteService {
   @Remote('unarchiveSession')
   unarchiveSession(request: WorkspaceUnarchiveSessionRequest): Promise<WorkspaceArchiveValue> {
     return this.commands.unarchiveSession(request)
-  }
-
-  /**
-   * Permanently delete one Session's stored data. Irreversible; a Session with
-   * running work is refused until its work is stopped.
-   * @param request - Session identity to delete.
-   * @returns the deletion receipt.
-   */
-  @Remote('deleteSession')
-  deleteSession(request: WorkspaceDeleteSessionRequest): Promise<WorkspaceDeleteSessionValue> {
-    return this.commands.deleteSession(request)
   }
 
   /**

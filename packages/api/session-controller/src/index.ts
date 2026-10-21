@@ -4,7 +4,6 @@ import { hostname } from 'node:os'
 import { resolve } from 'node:path'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-fs'
-import type {} from '@deepseek-ai/dsh-workspace'
 import { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { errorChain, ReasoningEffortId, type MessageSource } from '@deepseek-ai/dsh-llm'
@@ -194,13 +193,6 @@ export class SessionController extends TypertRemoteService {
     })
     ctx.on('session/disposed', (session) => {
       ctx.emit('api-session/removed', session.id)
-    })
-    // A deleted session's stored data is gone; drop its client-facing row.
-    // The registry refuses deletion while the session is active, so no live
-    // Agent is torn down here — a resident idle instance simply loses its row,
-    // and a cold session that was never live is removed the same way.
-    ctx.on('workspace/session-delete', ({ sessionId }) => {
-      ctx.emit('api-session/removed', sessionId)
     })
     const publishAgentAvailability = ({ agent }: { agent: Agent }): undefined => {
       if (ctx.sessions.get(agent.id) === agent.session) {

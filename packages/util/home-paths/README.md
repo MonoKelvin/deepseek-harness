@@ -83,10 +83,6 @@ The package is built on one principle: harness user data lives under one root, a
 
 `resolveDshHome` reads the explicit override, then `$DSH_HOME`, then falls back to the operating-system home joined with `.dsh`. `resolveAgentsHome` reads the same three levels for `$DSH_AGENTS_HOME` and `~/.agents`. The chosen value is tilde-expanded and normalized to an absolute path; `dshHomePath` joins child segments with Node's platform path rules. `dshHomeDisplay` and `agentsHomeDisplay` compare the resolved path against the default root and return the symbolic label, so a configured root never leaks its absolute path.
 
-### Data-directory relocation
-
-`migrateDataDirectory(target)` copies the current data directory to a chosen location, then writes a pointer (`.data-location`) and a deferred-cleanup marker (`.data-cleanup`) at the fixed default root. The launcher calls `applyDataDirectoryRedirect(env)` once before anything resolves `$DSH_HOME`: it deletes the directory the marker records and, when `$DSH_HOME` is not explicitly set, points the environment at the recorded directory. The pointer and marker always live at the default root, never inside the movable data, and the previous directory is deleted only after the copy is verified, so a failed copy never destroys the source and no redundant copy remains after the restart.
-
 ### Canonicalization mechanics
 
 `canonicalizeWatchPath` walks up from the target until it finds an existing ancestor, resolves it with `realpath`, proves it is an enumerable directory, and restores the missing suffix. Errors other than absence propagate, and a missing-suffix ancestor that is not a directory is rejected.

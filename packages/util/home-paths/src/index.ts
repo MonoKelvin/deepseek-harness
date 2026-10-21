@@ -195,13 +195,3 @@ export function dshHomeDisplay(resolvedHome: string): string {
 export function agentsHomeDisplay(resolvedHome: string): string {
   return rootDisplay(resolvedHome, defaultAgentsHome(), DEFAULT_AGENTS_HOME_DISPLAY, AGENTS_HOME_ENV)
 }
-
-export {
-  DATA_CLEANUP_FILE,
-  DATA_LOCATION_FILE,
-  applyDataDirectoryRedirect,
-  dataCleanupMarkerPath,
-  dataLocationPointerPath,
-  migrateDataDirectory,
-} from './data-directory.ts'
-export type { DataDirectoryMigration, DataDirectoryRedirect } from './data-directory.ts'

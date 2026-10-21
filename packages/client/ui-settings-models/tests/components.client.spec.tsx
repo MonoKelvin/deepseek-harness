@@ -312,11 +312,7 @@ function cardSeatCalls(
     ])
 }
 
-async function mountFace(
-  scripted: ReturnType<typeof scriptedFace>,
-  intent?: ModelsSectionProps['intent'],
-  onIntentHandled?: () => void,
-) {
+async function mountFace(scripted: ReturnType<typeof scriptedFace>) {
   const { face, update, mutate, set, unset } = scripted
   const ctx = ctxWith(face)
   const mirror = new SettingsDescribeMirror(ctx)
@@ -330,7 +326,6 @@ async function mountFace(
     schema: settingsSchema,
     t,
     renderSlot: renderSlot as unknown as ModelsSectionProps['renderSlot'],
-    ...intent === undefined ? {} : { intent, onIntentHandled },
   }
   const view = render(<ModelsSection {...injected} />)
   return { view, ctx, face, update, mutate, set, unset, controller, mirror, renderSlot }
@@ -609,24 +604,6 @@ describe('ModelsSection', () => {
     scripted.face.settings.describe.mockResolvedValue(remoteOk({ writable: true, hasDocument: false, namespaces: [] }))
     await mountFace(scripted)
     expect(screen.queryByRole('button', { name: en.add })).toBeNull()
-  })
-
-  it('opens the add card when the composer picker lands here with the add intent', async () => {
-    const onIntentHandled = vi.fn()
-    await mountFace(scriptedFace(), 'models.add-provider', onIntentHandled)
-    // The card replaced the entry button, so the add flow is already open, and
-    // the one-shot intent is cleared as it is honored.
-    expect(screen.queryByRole('button', { name: en.add })).toBeNull()
-    expect(onIntentHandled).toHaveBeenCalledOnce()
-  })
-
-  it('holds the picker intent until the page can offer the add flow', async () => {
-    const scripted = scriptedFace()
-    scripted.face.settings.describe.mockResolvedValue(remoteOk({ writable: true, hasDocument: false, namespaces: [] }))
-    const onIntentHandled = vi.fn()
-    await mountFace(scripted, 'models.add-provider', onIntentHandled)
-    // Nothing can be added yet, so the intent is neither honored nor dropped.
-    expect(onIntentHandled).not.toHaveBeenCalled()
   })
 
   it('offers only providers whose settings namespace can open an editor', async () => {
