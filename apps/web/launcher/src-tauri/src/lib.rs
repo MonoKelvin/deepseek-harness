@@ -15,77 +15,84 @@ use tokio::sync::Mutex;
 
 /// Path to the lock file for single instance enforcement
 fn lock_file_path() -> PathBuf {
-  let temp_dir = std::env::temp_dir();
-  temp_dir.join("dsh-web-launcher.lock")
+  std::env::temp_dir().join("dsh-web-launcher.lock")
 }
 
-/// PID stored in the lock file
+/// Identity of a launcher process. The PID alone is not an identity: the system
+/// reuses PIDs, so a lock left behind by a launcher that was killed ends up naming
+/// an unrelated process, and every later start exits believing the launcher runs.
+#[derive(Clone, Copy)]
+struct LockHolder {
+  pid: u32,
+  /// Process creation time in 100 ns ticks, `0` when the platform cannot report it.
+  created: u64,
+}
+
+enum LockOutcome {
+  /// This process now owns the lock: it is the only launcher (stale locks included).
+  Acquired,
+  /// Another launcher is alive and holds the lock.
+  HeldBy(LockHolder),
+}
+
 struct LockFile {
   path: PathBuf,
+  /// Kept open for the process lifetime; closing it is what `release` reverses.
   file: Option<File>,
+  holder: LockHolder,
 }
 
 impl LockFile {
   fn new() -> Self {
     let path = lock_file_path();
-    let temp_dir = std::env::temp_dir();
-    let parent = path.parent().unwrap_or(&temp_dir);
-    let _ = std::fs::create_dir_all(parent);
-    Self { path, file: None }
-  }
-
-  /// Try to acquire a single instance lock.
-  /// Returns true if this is the only instance (we got the lock), false if another instance is running.
-  fn try_lock(&mut self) -> bool {
-    let current_pid = std::process::id();
-
-    // Check if lock file exists and contains a valid PID
-    if let Ok(mut file) = File::open(&self.path) {
-      let mut pid_str = String::new();
-        if file.read_to_string(&mut pid_str).is_ok() {
-          if let Ok(past_pid) = pid_str.trim().parse::<u32>() {
-            // Check if the process is still running
-            if Self::is_process_running(past_pid) {
-              return false; // Another instance is running
-            }
-          }
-        }
+    if let Some(parent) = path.parent() {
+      let _ = std::fs::create_dir_all(parent);
     }
+    let pid = std::process::id();
+    Self { path, file: None, holder: LockHolder { pid, created: process_created(pid).unwrap_or(0) } }
+  }
 
-    // Create or overwrite the lock file with our PID
-    if let Ok(mut file) = File::create(&self.path) {
-      let _ = file.write_all(format!("{}", current_pid).as_bytes());
-      self.file = Some(file);
-      true
-    } else {
-      false
+  /// Claims the lock, or reports the launcher that holds it. A lock whose holder is
+  /// gone is stale and is simply overwritten, so a killed launcher never blocks the
+  /// next start.
+  fn try_lock(&mut self) -> LockOutcome {
+    if let Some(held) = self.read_holder() {
+      if held.pid != self.holder.pid && is_lock_holder_alive(held) {
+        return LockOutcome::HeldBy(held);
+      }
     }
+    match File::create(&self.path) {
+      Ok(mut file) => {
+        let _ = file.write_all(format!("{} {}", self.holder.pid, self.holder.created).as_bytes());
+        self.file = Some(file);
+      }
+      // An unwritable lock cannot enforce anything; starting beats refusing to.
+      Err(_) => self.file = None,
+    }
+    LockOutcome::Acquired
   }
 
-  /// Check if a process with the given PID is still running
-  #[cfg(target_os = "windows")]
-  fn is_process_running(pid: u32) -> bool {
-    use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_INFORMATION};
-    let handle = unsafe { OpenProcess(PROCESS_QUERY_INFORMATION, false, pid) };
-    handle.is_ok()
+  /// The holder recorded in the lock file, ignoring values that are not one.
+  /// A bare PID is the format older builds wrote, and carries no creation time.
+  fn read_holder(&self) -> Option<LockHolder> {
+    let mut contents = String::new();
+    File::open(&self.path).ok()?.read_to_string(&mut contents).ok()?;
+    let mut fields = contents.split_whitespace();
+    let pid = fields.next()?.parse::<u32>().ok()?;
+    let created = fields.next().and_then(|value| value.parse::<u64>().ok()).unwrap_or(0);
+    Some(LockHolder { pid, created })
   }
 
-  #[cfg(not(target_os = "windows"))]
-  fn is_process_running(pid: u32) -> bool {
-    // On Unix, check if the process exists by sending signal 0
-    use std::process::Command;
-    Command::new("kill")
-      .arg("-0")
-      .arg(pid.to_string())
-      .output()
-      .map(|output| output.status.success())
-      .unwrap_or(false)
-  }
-
-  /// Release the lock file
+  /// Releases the lock. Another launcher may have reclaimed it after this one was
+  /// replaced, so only the file that still names this process is removed.
   fn release(&mut self) {
     let _ = self.file.take();
-    let _ = std::fs::remove_file(&self.path);
+    let removed = self
+      .read_holder()
+      .is_some_and(|held| held.pid == self.holder.pid && held.created == self.holder.created);
+    if removed {
+      let _ = std::fs::remove_file(&self.path);
+    }
   }
 }
 
@@ -93,6 +100,128 @@ impl Drop for LockFile {
   fn drop(&mut self) {
     self.release();
   }
+}
+
+#[cfg(target_os = "windows")]
+/// `Some` once `pid` exists, with the creation time that distinguishes it from a
+/// later process the system gave the same PID.
+fn process_created(pid: u32) -> Option<u64> {
+  use windows::Win32::Foundation::{CloseHandle, FILETIME};
+  use windows::Win32::System::Threading::{GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+  let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?;
+  let mut created = FILETIME::default();
+  let mut exited = FILETIME::default();
+  let mut kernel = FILETIME::default();
+  let mut user = FILETIME::default();
+  let times = unsafe { GetProcessTimes(process, &mut created, &mut exited, &mut kernel, &mut user) };
+  let _ = unsafe { CloseHandle(process) };
+  times.ok()?;
+  Some((u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn process_created(_pid: u32) -> Option<u64> {
+  None
+}
+
+#[cfg(target_os = "windows")]
+fn is_lock_holder_alive(holder: LockHolder) -> bool {
+  let Some(created) = process_created(holder.pid) else {
+    return false;
+  };
+  if holder.created != 0 {
+    return created == holder.created;
+  }
+  process_image_name(holder.pid).is_some_and(|name| name.eq_ignore_ascii_case(current_image_name()))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn is_lock_holder_alive(holder: LockHolder) -> bool {
+  // Signal 0 only probes for the process; a reused PID is not distinguishable here,
+  // but a launcher that dies on these platforms still releases the lock on exit.
+  use std::process::Command;
+  Command::new("kill")
+    .arg("-0")
+    .arg(holder.pid.to_string())
+    .status()
+    .map(|status| status.success())
+    .unwrap_or(false)
+}
+
+/// File name of `pid`'s executable, used for the lock format that carries no
+/// creation time.
+#[cfg(target_os = "windows")]
+fn process_image_name(pid: u32) -> Option<String> {
+  use windows::Win32::Foundation::CloseHandle;
+  use windows::Win32::System::Threading::{
+    OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+  };
+  use windows::core::PWSTR;
+  let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?;
+  let mut buffer = [0u16; 1024];
+  let mut length = buffer.len() as u32;
+  let read = unsafe { QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, PWSTR(buffer.as_mut_ptr()), &mut length) };
+  let _ = unsafe { CloseHandle(process) };
+  read.ok()?;
+  let path = String::from_utf16_lossy(&buffer[..length as usize]);
+  Some(path.rsplit(['\\', '/']).next().unwrap_or_default().to_owned())
+}
+
+/// File name of this executable.
+fn current_image_name() -> &'static str {
+  static NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+  NAME.get_or_init(|| {
+    std::env::current_exe()
+      .ok()
+      .and_then(|path| path.file_name().and_then(std::ffi::OsStr::to_str).map(str::to_owned))
+      .unwrap_or_else(|| "dsh-web-launcher.exe".to_owned())
+  })
+}
+
+#[cfg(target_os = "windows")]
+/// Shows and focuses the window `pid` owns, so a second start does something
+/// visible instead of leaving the running launcher hidden in the tray.
+fn reveal_existing_window(pid: u32) -> bool {
+  use windows::Win32::Foundation::{HWND, LPARAM};
+  use windows::core::BOOL;
+  use windows::Win32::UI::WindowsAndMessaging::{
+    EnumWindows, GetWindowTextLengthW, GetWindowThreadProcessId, IsIconic, IsWindowVisible, SetForegroundWindow,
+    ShowWindow, SW_RESTORE, SW_SHOW,
+  };
+
+  struct Candidates {
+    pid: u32,
+    windows: Vec<HWND>,
+  }
+
+  unsafe extern "system" fn collect(hwnd: HWND, lparam: LPARAM) -> BOOL {
+    let candidates = unsafe { &mut *(lparam.0 as *mut Candidates) };
+    let mut owner = 0u32;
+    unsafe { GetWindowThreadProcessId(hwnd, Some(&mut owner)) };
+    // Titled top-level windows only: the webview creates untitled helper windows
+    // in the same process, and showing one of those would surface nothing.
+    if owner == candidates.pid && unsafe { GetWindowTextLengthW(hwnd) } > 0 {
+      candidates.windows.push(hwnd);
+    }
+    BOOL(1)
+  }
+
+  let mut candidates = Candidates { pid, windows: Vec::new() };
+  let _ = unsafe { EnumWindows(Some(collect), LPARAM(&raw mut candidates as isize)) };
+  let mut revealed = false;
+  for hwnd in candidates.windows {
+    unsafe {
+      let _ = ShowWindow(hwnd, if IsIconic(hwnd).as_bool() { SW_RESTORE } else { SW_SHOW });
+      let _ = SetForegroundWindow(hwnd);
+      revealed |= IsWindowVisible(hwnd).as_bool();
+    }
+  }
+  revealed
+}
+
+#[cfg(not(target_os = "windows"))]
+fn reveal_existing_window(_pid: u32) -> bool {
+  false
 }
 
 use process::{
@@ -397,6 +526,7 @@ async fn stop_services_before_exit(app: &AppHandle) -> bool {
   };
   let settings = settings_lock.lock().await.clone();
   if !settings.stop_services_on_exit {
+    record_exit_stop(app, "skipped: stop-on-exit is disabled");
     return true;
   }
   // Mirror the Stop button: act on whatever holds the configured port, whether
@@ -408,18 +538,56 @@ async fn stop_services_before_exit(app: &AppHandle) -> bool {
     let manager = manager.lock().await;
     manager.pid.is_some() || manager.child.is_some()
   };
-  let running = managed || process::is_port_open("127.0.0.1", settings.port).await;
-  if !running {
+  let port_open = process::is_port_open(settings.port).await;
+  if !managed && !port_open {
+    record_exit_stop(app, &format!("skipped: nothing running (port {} closed)", settings.port));
     return true;
   }
   let outcome = {
     let mut manager = manager.lock().await;
     tokio::time::timeout(STOP_ON_EXIT_TIMEOUT, stop_dsh_web(&mut manager, &settings)).await
   };
-  if matches!(outcome, Ok(Ok(()))) {
-    return true;
+  let failure = match outcome {
+    Ok(Ok(())) => {
+      record_exit_stop(app, "stopped");
+      return true;
+    }
+    Ok(Err(error)) => error,
+    Err(_) => "the stop did not finish in time".to_string(),
+  };
+  record_exit_stop(app, &format!("failed: {failure}"));
+  let proceed = confirm_exit_after_failed_stop(app, &settings);
+  record_exit_stop(app, if proceed { "user chose to exit anyway" } else { "user cancelled the exit" });
+  proceed
+}
+
+/// Path of the after-the-fact record of on-exit stop attempts.
+fn exit_stop_log_path(app: &AppHandle) -> Option<PathBuf> {
+  let mut path = app.path().config_dir().ok()?;
+  path.push("deepseek-harness-launcher");
+  path.push("exit-stop.log");
+  Some(path)
+}
+
+/// Append one line per on-exit stop attempt to the config directory.
+///
+/// The in-app log buffer dies with the process, so a service that survives the
+/// exit would otherwise leave no trace of why the stop did not take; this file
+/// is the record to read after the fact.
+fn record_exit_stop(app: &AppHandle, detail: &str) {
+  let Some(path) = exit_stop_log_path(app) else { return };
+  if let Some(parent) = path.parent() {
+    let _ = std::fs::create_dir_all(parent);
   }
-  confirm_exit_after_failed_stop(app, &settings)
+  let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(&path) else { return };
+  let secs = std::time::SystemTime::now()
+    .duration_since(std::time::UNIX_EPOCH)
+    .map(|elapsed| elapsed.as_secs())
+    .unwrap_or_default();
+  let stamp = chrono::DateTime::from_timestamp(secs as i64, 0)
+    .map(|datetime| datetime.format("%Y-%m-%d %H:%M:%S").to_string())
+    .unwrap_or_else(|| secs.to_string());
+  let _ = writeln!(file, "{stamp} {detail}");
 }
 
 /// Ask the user whether to exit after the on-exit stop failed. Returns whether to
@@ -508,11 +676,18 @@ fn is_autostart_launch() -> bool {
 }
 
 pub fn run() {
-  // Check for single instance - exit if another instance is running
+  // A start has to end in a window: reclaim a lock whose holder is gone (a launcher
+  // that was killed leaves one behind), and reveal the running launcher's window
+  // when it does exist, since it hides in the tray and a double-click otherwise
+  // appears to do nothing at all.
   let mut lock_file = LockFile::new();
-  if !lock_file.try_lock() {
-    eprintln!("Another instance of DSH launcher is already running. Please close the existing instance first.");
-    std::process::exit(1);
+  if let LockOutcome::HeldBy(holder) = lock_file.try_lock() {
+    if reveal_existing_window(holder.pid) {
+      std::process::exit(0);
+    }
+    // Nothing to reveal means the holder cannot serve the request; refusing to
+    // start would leave the user with no launcher at all.
+    eprintln!("DSH launcher (PID {}) is running without a window; starting another instance.", holder.pid);
   }
 
   let manager = ServerManager::new();

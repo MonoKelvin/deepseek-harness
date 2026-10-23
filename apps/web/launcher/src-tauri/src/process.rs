@@ -189,6 +189,9 @@ pub struct ServerManager {
   pub log_handle: Option<JoinHandle<()>>,
   pub logs: SharedLogBuffer,
   pub pid: Option<u32>,
+  /// Job that owns the managed tree, so Windows ends it with this process.
+  #[cfg(target_os = "windows")]
+  pub job: Option<ProcessJob>,
 }
 
 impl ServerManager {
@@ -198,6 +201,8 @@ impl ServerManager {
       log_handle: None,
       logs: new_log_buffer(),
       pid: None,
+      #[cfg(target_os = "windows")]
+      job: None,
     }
   }
 }
@@ -246,10 +251,18 @@ pub fn repo_root_from_settings(settings: &AppSettings) -> String {
     .unwrap_or_else(|_| ".".to_string())
 }
 
-/// Check if a TCP port is accepting connections — used to detect external servers.
-pub async fn is_port_open(host: &str, port: u16) -> bool {
-  let addr = format!("{}:{}", host, port);
-  tokio::net::TcpStream::connect(&addr).await.is_ok()
+/// Check whether a TCP port accepts connections on the loopback interface.
+///
+/// A server can bind the IPv6 loopback (`::1`) alone, which an IPv4-only probe
+/// reports as closed; both families are tried, so status detection and the
+/// stop's release verification agree with what the user can actually reach.
+pub async fn is_port_open(port: u16) -> bool {
+  for host in [DEFAULT_HOST, "::1"] {
+    if tokio::net::TcpStream::connect((host, port)).await.is_ok() {
+      return true;
+    }
+  }
+  false
 }
 
 async fn read_stream(
@@ -479,8 +492,84 @@ pub async fn start_dsh_web(manager: &mut ServerManager, settings: &crate::state:
   manager.child = Some(child);
   manager.log_handle = Some(log_handle);
   manager.pid = Some(pid);
+  #[cfg(target_os = "windows")]
+  {
+    // The job is the crash safety net of the on-exit stop, so it is only created
+    // when the user asked for the service to stop with the launcher: with the
+    // setting off the service is meant to outlive this process, and a job would
+    // end it anyway. Replacing a previous job still ends the tree it owned.
+    manager.job = None;
+    if settings.stop_services_on_exit {
+      match ProcessJob::create().and_then(|job| job.assign(pid).map(|()| job)) {
+        Ok(job) => manager.job = Some(job),
+        Err(error) => append_log(&manager.logs, LogSource::Launcher, LogSeverity::Warn, crate::state::t_log(&locale, "process.job.failed", &[("error", &error.to_string())])).await,
+      }
+    }
+  }
   append_log(&manager.logs, LogSource::Launcher, LogSeverity::Info, crate::state::t_log(&locale, "process.started", &[("pid", &pid.to_string())])).await;
   Ok(pid)
+}
+
+/// Process tree of a server this launcher started, ended by Windows when the
+/// launcher process goes away.
+///
+/// `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` binds every member of the job to the last
+/// open handle of that job, and descendants the server spawns later inherit the
+/// membership. That makes the teardown independent of the PID bookkeeping the
+/// stop depends on: an exit path that never runs — a crash, a force quit, or a
+/// listener `netstat` does not attribute to any process — still leaves no server
+/// behind.
+#[cfg(target_os = "windows")]
+#[derive(Debug)]
+pub struct ProcessJob(usize);
+
+#[cfg(target_os = "windows")]
+impl ProcessJob {
+  /// Create a job whose remaining members die when the last handle closes.
+  pub fn create() -> io::Result<Self> {
+    use windows::core::PCWSTR;
+    use windows::Win32::System::JobObjects::{
+      CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject,
+      JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+    let job = unsafe { CreateJobObjectW(None, PCWSTR::null()) }?;
+    let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    let configured = unsafe {
+      SetInformationJobObject(
+        job,
+        JobObjectExtendedLimitInformation,
+        (&raw const limits).cast(),
+        std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+      )
+    };
+    if let Err(error) = configured {
+      let _ = unsafe { windows::Win32::Foundation::CloseHandle(job) };
+      return Err(io::Error::other(format!("cannot configure the kill-on-close job: {error}")));
+    }
+    Ok(Self(job.0 as usize))
+  }
+
+  /// Add `pid` to the job, which carries its future descendants with it.
+  pub fn assign(&self, pid: u32) -> io::Result<()> {
+    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows::Win32::System::JobObjects::AssignProcessToJobObject;
+    use windows::Win32::System::Threading::{OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE};
+    let process = unsafe { OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, false.into(), pid) }
+      .map_err(|error| io::Error::other(format!("cannot open process {pid}: {error}")))?;
+    let assigned = unsafe { AssignProcessToJobObject(HANDLE(self.0 as *mut _), process) };
+    let _ = unsafe { CloseHandle(process) };
+    assigned.map_err(|error| io::Error::other(format!("cannot add process {pid} to the job: {error}")))
+  }
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for ProcessJob {
+  fn drop(&mut self) {
+    // Closing the last handle ends every remaining member, which is what the
+    // stop relies on when it cannot terminate the tree itself.
+    let _ = unsafe { windows::Win32::Foundation::CloseHandle(windows::Win32::Foundation::HANDLE(self.0 as *mut _)) };
+  }
 }
 
 /// Terminate `pid` together with every process it started.
@@ -524,7 +613,9 @@ async fn terminate_listener(pid: u32) -> io::Result<()> {
 /// A server the launcher started is stopped through its own process tree. When
 /// the port is still held afterwards — a server another program started, or one
 /// the tree kill could not reach — the socket owner is terminated instead, since
-/// it is the only remaining handle on the process holding the port.
+/// it is the only remaining handle on the process holding the port. The stop
+/// fails once every attempt is spent and the port still accepts connections, so
+/// no caller is left believing a live service was stopped.
 pub async fn stop_dsh_web(manager: &mut ServerManager, settings: &crate::state::AppSettings) -> Result<(), String> {
   let locale = crate::state::current_locale(settings);
   let port = settings.port;
@@ -560,29 +651,32 @@ pub async fn stop_dsh_web(manager: &mut ServerManager, settings: &crate::state::
   }
   manager.child = None;
   manager.pid = None;
+  // Closing the job ends every member the tree kill could not reach, including
+  // descendants the server started after the launcher recorded its PID.
+  #[cfg(target_os = "windows")]
+  {
+    manager.job = None;
+  }
   if !await_port_released(port, PORT_RELEASE_GRACE).await {
-    let stopped = match stop_port_owner(&manager.logs, &locale, port).await {
-      Ok(stopped) => stopped,
-      Err(error) => {
-        let error = format!("Failed to stop dsh web: {error}");
-        log_command_result(&manager.logs, &locale, "stop", Err(&error)).await;
-        return Err(error);
-      }
-    };
+    if let Err(error) = stop_port_owner(&manager.logs, &locale, port).await {
+      let error = format!("Failed to stop dsh web: {error}");
+      log_command_result(&manager.logs, &locale, "stop", Err(&error)).await;
+      return Err(error);
+    }
     // Report the stop only once the socket is free, so the next status poll
-    // cannot still see the stopped server as running. A port that accepts
-    // connections with no listed owner is a different failure from one whose
-    // owner kept the socket, and only the second has an actionable cause.
+    // cannot still see the stopped server as running. A port that still accepts
+    // connections is the user's definition of "the service is running", so a
+    // socket that survives every attempt is a failed stop — whoever holds it
+    // now. Reporting success here would let the exit proceed while the service
+    // keeps running, which is the silent failure the on-exit confirmation
+    // exists to surface.
     if !await_port_released(port, PORT_RELEASE_TIMEOUT).await {
-      let key = if stopped.is_empty() { "process.owner.missing" } else { "process.port.held" };
-      let error = crate::state::t_log(&locale, key, &[("port", &port.to_string())]);
-      // What still holds the port separates a port taken over from a terminate
-      // that did not take effect, which the failure alone cannot.
       let remaining = listening_owners(port).await.unwrap_or_default();
       if !remaining.is_empty() {
         let pids = remaining.iter().map(u32::to_string).collect::<Vec<_>>().join(", ");
         append_log(&manager.logs, LogSource::Launcher, LogSeverity::Warn, crate::state::t_log(&locale, "process.port.listeners", &[("port", &port.to_string()), ("pids", &pids)])).await;
       }
+      let error = crate::state::t_log(&locale, "process.port.held", &[("port", &port.to_string())]);
       log_command_result(&manager.logs, &locale, "stop", Err(&error)).await;
       return Err(error);
     }
@@ -596,7 +690,7 @@ pub async fn stop_dsh_web(manager: &mut ServerManager, settings: &crate::state::
 async fn await_port_released(port: u16, timeout: Duration) -> bool {
   let deadline = Instant::now() + timeout;
   loop {
-    if !is_port_open(DEFAULT_HOST, port).await {
+    if !is_port_open(port).await {
       return true;
     }
     if Instant::now() >= deadline {
@@ -634,15 +728,24 @@ async fn listening_owners(port: u16) -> io::Result<Vec<u32>> {
 ///
 /// Every attempt is recorded with its PID, because a port that stays busy after a
 /// successful termination is otherwise visible only as its final failure. Returns
-/// the owners that were asked to stop.
+/// the owners this call terminated.
 #[cfg(target_os = "windows")]
 async fn terminate_port_listener(logs: &SharedLogBuffer, locale: &str, port: u16) -> io::Result<Vec<u32>> {
   let owners = listening_owners(port).await?;
-  for pid in &owners {
-    terminate_listener(*pid).await?;
-    append_log(logs, LogSource::Launcher, LogSeverity::Info, crate::state::t_log(locale, "process.kill.result", &[("port", &port.to_string()), ("pid", &pid.to_string())])).await;
+  let mut terminated = Vec::new();
+  for pid in owners {
+    match terminate_listener(pid).await {
+      Ok(()) => {
+        terminated.push(pid);
+        append_log(logs, LogSource::Launcher, LogSeverity::Info, crate::state::t_log(locale, "process.kill.result", &[("port", &port.to_string()), ("pid", &pid.to_string())])).await;
+      }
+      // One owner the launcher may not terminate must not abandon the others: a
+      // port can also be attributed to a process in another session or another
+      // user, which is not the server this stop targets.
+      Err(error) => append_log(logs, LogSource::Launcher, LogSeverity::Warn, crate::state::t_log(locale, "process.kill.refused", &[("port", &port.to_string()), ("pid", &pid.to_string()), ("error", &error.to_string())])).await,
+    }
   }
-  Ok(owners)
+  Ok(terminated)
 }
 
 /// Read the PIDs `lsof` attributes the listening sockets of `port` to.
@@ -660,16 +763,23 @@ async fn listening_owners(port: u16) -> io::Result<Vec<u32>> {
 
 /// Terminate the process listening on `port` through `lsof`.
 ///
-/// Each attempt is recorded, matching the Windows path. Platforms without `lsof`
-/// surface the spawn error, which the caller reports as a stop failure.
+/// Each attempt is recorded, matching the Windows path, and a signal the platform
+/// refuses does not abandon the remaining owners. Platforms without `lsof` surface
+/// the spawn error, which the caller reports as a stop failure.
 #[cfg(not(target_os = "windows"))]
 async fn terminate_port_listener(logs: &SharedLogBuffer, locale: &str, port: u16) -> io::Result<Vec<u32>> {
   let owners = listening_owners(port).await?;
-  for pid in &owners {
-    tokio::process::Command::new("kill").args(["-TERM", &pid.to_string()]).status().await?;
-    append_log(logs, LogSource::Launcher, LogSeverity::Info, crate::state::t_log(locale, "process.kill.result", &[("port", &port.to_string()), ("pid", &pid.to_string())])).await;
+  let mut terminated = Vec::new();
+  for pid in owners {
+    match tokio::process::Command::new("kill").args(["-TERM", &pid.to_string()]).status().await {
+      Ok(_) => {
+        terminated.push(pid);
+        append_log(logs, LogSource::Launcher, LogSeverity::Info, crate::state::t_log(locale, "process.kill.result", &[("port", &port.to_string()), ("pid", &pid.to_string())])).await;
+      }
+      Err(error) => append_log(logs, LogSource::Launcher, LogSeverity::Warn, crate::state::t_log(locale, "process.kill.refused", &[("port", &port.to_string()), ("pid", &pid.to_string()), ("error", &error.to_string())])).await,
+    }
   }
-  Ok(owners)
+  Ok(terminated)
 }
 
 /// Terminate whatever holds `port`, re-resolving the owner after each round.
@@ -677,11 +787,11 @@ async fn terminate_port_listener(logs: &SharedLogBuffer, locale: &str, port: u16
 /// One round is not always enough. The process `netstat` attributes a port to can
 /// change between rounds — a shell shim hands the listening socket to a surviving
 /// child, a supervisor restarts the server — and each round can only terminate what
-/// owns the port at that moment. Returns the PIDs that were asked to stop, in order.
+/// owns the port at that moment. Returns the PIDs it terminated, in order.
 async fn stop_port_owner(logs: &SharedLogBuffer, locale: &str, port: u16) -> io::Result<Vec<u32>> {
   let mut stopped = Vec::new();
   for _ in 0..PORT_OWNER_ROUNDS {
-    if !is_port_open(DEFAULT_HOST, port).await {
+    if !is_port_open(port).await {
       break;
     }
     let round = terminate_port_listener(logs, locale, port).await?;
@@ -707,7 +817,7 @@ pub async fn build_status(shared: &SharedManager, dsh_directory_valid: bool, por
     let alive = reap_if_exited(&mut manager);
     (alive, manager.pid, manager.logs.clone())
   };
-  let port_open = is_port_open(DEFAULT_HOST, port).await;
+  let port_open = is_port_open(port).await;
   let (state, external, pid) = if managed_alive {
     (ServerState::RunningManaged, false, managed_pid)
   } else if port_open {
@@ -889,11 +999,76 @@ mod tests {
   #[cfg(target_os = "windows")]
   async fn settles_to_port(port: u16, open: bool) -> bool {
     for _ in 0..200 {
-      if is_port_open(DEFAULT_HOST, port).await == open {
+      if is_port_open(port).await == open {
         return true;
       }
       tokio::time::sleep(Duration::from_millis(50)).await;
     }
     false
+  }
+
+  /// A server another program started has no recorded PID, so the stop reaches it
+  /// only through the port owner; the full stop path must free the port rather
+  /// than merely report an attempt, which is what lets the exit trust its result.
+  #[cfg(target_os = "windows")]
+  #[tokio::test]
+  async fn stopping_an_unmanaged_server_through_the_full_stop_frees_the_port() {
+    let probe = std::net::TcpListener::bind((DEFAULT_HOST, 0)).unwrap();
+    let port = probe.local_addr().unwrap().port();
+    drop(probe);
+    let serve = format!("require('net').createServer().listen({port}, '{DEFAULT_HOST}')");
+    let mut child = tokio::process::Command::new("node")
+      .args(["-e", &serve])
+      .stdout(Stdio::null())
+      .stderr(Stdio::null())
+      .spawn()
+      .unwrap();
+    assert!(settles_to_port(port, true).await, "the stand-in server holds the port");
+
+    let mut manager = ServerManager::new();
+    let settings = crate::state::AppSettings {
+      dsh_directory: None,
+      theme: "system".to_string(),
+      locale: "zh".to_string(),
+      port,
+      autostart: false,
+      stop_services_on_exit: true,
+    };
+    stop_dsh_web(&mut manager, &settings).await.expect("the stop frees the port");
+    assert!(settles_to_port(port, false).await, "the port owner stopped");
+
+    let _ = child.wait().await;
+  }
+
+  /// The kill-on-close job is the safety net the on-exit stop relies on: closing
+  /// the launcher's last handle ends every member, including descendants the
+  /// server spawned after the PID was recorded.
+  #[cfg(target_os = "windows")]
+  #[tokio::test]
+  async fn dropping_the_job_ends_the_descendant_it_owns() {
+    let dir = std::env::temp_dir().join(format!("dsh-launcher-job-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let leaf_name = format!("dsh-job-leaf-{}.exe", std::process::id());
+    let leaf = dir.join(&leaf_name);
+    let system_root = std::env::var("SystemRoot").expect("Windows defines SystemRoot");
+    std::fs::copy(PathBuf::from(system_root).join("System32").join("PING.EXE"), &leaf).unwrap();
+    let shim = dir.join("job-shim.cmd");
+    std::fs::write(&shim, format!("@echo off\r\n\"{}\" -n 60 127.0.0.1 >nul\r\n", leaf.display())).unwrap();
+
+    let mut child = tokio::process::Command::new(&shim)
+      .stdout(Stdio::null())
+      .stderr(Stdio::null())
+      .spawn()
+      .unwrap();
+    let pid = child.id().expect("newly spawned child has a PID");
+    assert!(settles_to(&leaf_name, true).await, "the shim started its descendant");
+
+    let job = ProcessJob::create().expect("the job is created");
+    job.assign(pid).expect("the shim joins the job");
+    drop(job);
+    assert!(settles_to(&leaf_name, false).await, "the descendant ended with the job");
+
+    let _ = child.wait().await;
+    let _ = std::fs::remove_dir_all(&dir);
   }
 }
