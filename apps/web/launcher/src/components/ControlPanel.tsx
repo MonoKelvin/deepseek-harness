@@ -3,7 +3,7 @@ import { useI18n, type TranslationKey } from '../i18n'
 import { Button } from '@/components/ui/button'
 import type { ServerState } from '../types/server-status'
 
-export type LauncherCommand = 'install' | 'build' | 'start' | 'stop' | 'restart' | 'open' | 'project'
+export type LauncherCommand = 'install' | 'build' | 'update' | 'start' | 'stop' | 'restart' | 'open' | 'project'
 
 interface ControlPanelProps {
   state?: ServerState
@@ -54,14 +54,22 @@ function Action({ command, label, icon, kind, disabled, activeCommand, tooltip, 
 export function ControlPanel({ state, canOpen, disabled, dshDirectoryValid, activeCommand, onCommand }: ControlPanelProps) {
   const { t } = useI18n()
   const running = state === 'running-managed' || state === 'running-external'
+  const transitioning = state === 'starting' || state === 'stopping'
   const preparingDisabled = disabled || !dshDirectoryValid || state !== 'stopped'
   const common = { activeCommand, onCommand }
   const preparationHint = (label: TranslationKey) => activeCommand ? t('controls.wait') : preparingDisabled ? t('controls.stopFirst') : t(label)
+  // Updating stops and restarts the service itself, so it stays available while
+  // the service runs; a start or stop in flight is the one state it would race.
+  const updateDisabled = disabled || !dshDirectoryValid || transitioning
+  const updateHint = activeCommand || transitioning
+    ? t('controls.wait')
+    : !dshDirectoryValid ? t('status.dshMissingTooltip') : t('controls.updateHint')
 
   return (
     <div className="service-actions">
       <div className="lifecycle-actions">
         <Action {...common} command={running ? 'open' : 'start'} label={running ? 'controls.open' : 'controls.start'} icon={running ? 'externalLink' : 'play'} kind="primary" disabled={disabled || !dshDirectoryValid || (running ? !canOpen : state !== 'stopped')} />
+        <Action {...common} command="update" label="controls.update" icon="update" kind="expand" disabled={updateDisabled} tooltip={updateHint} />
         <Action {...common} command="install" label="controls.install" icon="package" kind="expand" disabled={preparingDisabled} tooltip={preparationHint('controls.installHint')} />
         <Action {...common} command="build" label="controls.build" icon="hammer" kind="expand" disabled={preparingDisabled} tooltip={preparationHint('controls.buildHint')} />
       </div>

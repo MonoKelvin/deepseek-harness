@@ -24,6 +24,7 @@ interface SettingsPanelProps {
   onLocaleChange: (locale: 'zh' | 'en') => void
   onAutostartChange: (enabled: boolean) => void
   onStopServicesOnExitChange: (enabled: boolean) => void
+  onRebuildAfterPullChange: (enabled: boolean) => void
   onOpenProject: () => void
 }
 
@@ -31,7 +32,8 @@ interface SettingsPanelProps {
 export function SettingsPanel({
   version, theme, settings, dshDirectoryValid, serverRunning,
   onThemeChange, onDshDirectoryChange, onBrowseDshDirectory, onServerPortChange,
-  onLocaleChange, onAutostartChange, onStopServicesOnExitChange, onOpenProject,
+  onLocaleChange, onAutostartChange, onStopServicesOnExitChange, onRebuildAfterPullChange,
+  onOpenProject,
 }: SettingsPanelProps) {
   const { t, locale } = useI18n()
   const [directory, setDirectory] = useState(settings?.dshDirectory ?? '')
@@ -191,6 +193,21 @@ export function SettingsPanel({
               checked={settings?.stopServicesOnExit ?? true}
               disabled={!settings}
               onChange={onStopServicesOnExitChange}
+            />
+          </div>
+        </div>
+
+        <div className="setting-row">
+          <div className="setting-label">
+            <span>{t('settings.rebuildAfterPull')}</span>
+            <p className="setting-caption">{t('settings.rebuildAfterPullHint')}</p>
+          </div>
+          <div className="setting-control">
+            <Switch
+              ariaLabel={t('settings.rebuildAfterPull')}
+              checked={settings?.rebuildAfterPull ?? true}
+              disabled={!settings}
+              onChange={onRebuildAfterPullChange}
             />
           </div>
         </div>

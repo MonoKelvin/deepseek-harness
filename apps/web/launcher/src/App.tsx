@@ -17,10 +17,12 @@ import { useI18n, hasStoredLocale, type TranslationKey } from './i18n'
 import { BackgroundAnimation } from './lib/background-animation'
 import { MAX_LOG_ENTRIES } from './lib/constants'
 import {
-  installDeps, buildFrontend, startServer, stopServer, restartServer, openUrl,
-  getSettings, setDshDirectory, clearLogs, setTheme, setLocale, setAutostart, setStopServicesOnExit, setServerPort, openDirectoryPicker,
+  installDeps, buildFrontend, startServer, stopServer, restartServer, openUrl, updateRepo,
+  getSettings, setDshDirectory, clearLogs, setTheme, setLocale, setAutostart,
+  setStopServicesOnExit, setServerPort, setRebuildAfterPull, openDirectoryPicker,
   type CommandOutput, type AppSettings,
 } from './lib/tauri-api'
+import { waitForServerUrl } from './lib/server-url'
 import { revealWindowOnce } from './lib/reveal-window'
 import type { LogEntry } from './types/server-status'
 
@@ -32,7 +34,7 @@ interface UiError {
 }
 
 const commandLabels: Record<LauncherCommand, TranslationKey> = {
-  install: 'controls.install', build: 'controls.build', start: 'controls.start',
+  install: 'controls.install', build: 'controls.build', update: 'controls.update', start: 'controls.start',
   stop: 'controls.stop', restart: 'controls.restart', open: 'controls.open', project: 'settings.project',
 }
 
@@ -146,6 +148,21 @@ function App() {
     })),
   ].sort((left, right) => left.timestamp.replace('T', ' ').localeCompare(right.timestamp.replace('T', ' '))).slice(-MAX_LOG_ENTRIES), [logStream.entries, uiErrors, t])
 
+  // A start that reports success has a listening service behind it, so the same
+  // click can open it. The primary control is held busy while the address is
+  // resolved, and a failed open is reported on its own action rather than
+  // turning the successful start into a failure.
+  const openAfterStart = async () => {
+    setActiveCommand('start')
+    try {
+      const url = await waitForServerUrl()
+      if (!url) throw new Error(t('status.unavailable'))
+      await openUrl(url)
+    } catch (error) {
+      reportError(commandLabels.open, error)
+    }
+  }
+
   const runCommand = async (name: LauncherCommand, command: () => Promise<CommandOutput>) => {
     if (commandPending.current) return
     commandPending.current = true
@@ -155,6 +172,7 @@ function App() {
     try {
       const output = await command()
       setCommandSuccess(output.success)
+      if (name === 'start' && output.success) await openAfterStart()
     } catch (error) {
       reportError(commandLabels[name], error)
       setCommandSuccess(false)
@@ -170,7 +188,7 @@ function App() {
     return { success: true, stdout: '', stderr: '' }
   }
   const commands: Record<LauncherCommand, () => Promise<CommandOutput>> = {
-    install: installDeps, build: buildFrontend, start: startServer, stop: stopServer, restart: restartServer,
+    install: installDeps, build: buildFrontend, update: updateRepo, start: startServer, stop: stopServer, restart: restartServer,
     open: async () => {
       if (!status?.url) throw new Error(t('status.unavailable'))
       return open(status.url)
@@ -218,6 +236,9 @@ function App() {
   }
   const handleServerPortChange = (port: number) => {
     void setServerPort(port).then(setSettings).catch(error => reportError('settings.serverPort', error))
+  }
+  const handleRebuildAfterPullChange = (enabled: boolean) => {
+    void setRebuildAfterPull(enabled).then(setSettings).catch(error => reportError('settings.rebuildAfterPull', error))
   }
   const handleClearLogs = () => {
     void clearLogs().then(() => {
@@ -321,6 +342,7 @@ function App() {
               onLocaleChange={handleLocaleChange}
               onAutostartChange={handleAutostartChange}
               onStopServicesOnExitChange={handleStopServicesOnExitChange}
+              onRebuildAfterPullChange={handleRebuildAfterPullChange}
               onOpenProject={() => onCommand('project')}
             />}
         </section>

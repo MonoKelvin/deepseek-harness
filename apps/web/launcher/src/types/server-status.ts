@@ -31,4 +31,6 @@ export interface AppSettings {
   autostart: boolean
   /** Whether exiting the launcher also stops the dsh service it started. */
   stopServicesOnExit: boolean
+  /** Whether pulling new code immediately rebuilds and restarts the service. */
+  rebuildAfterPull: boolean
 }

@@ -35,9 +35,19 @@ pub struct AppSettings {
     /// managed child and is left running on exit.
     #[serde(default = "default_stop_services_on_exit")]
     pub stop_services_on_exit: bool,
+    /// Whether pulling new source immediately stops, installs, builds, and
+    /// restarts the service. Defaults to true and is persisted, so a settings
+    /// file written before this field existed loads as enabled. A pull that
+    /// brought no new commit skips the rebuild regardless of this value.
+    #[serde(default = "default_rebuild_after_pull")]
+    pub rebuild_after_pull: bool,
 }
 
 fn default_stop_services_on_exit() -> bool {
+    true
+}
+
+fn default_rebuild_after_pull() -> bool {
     true
 }
 
@@ -50,6 +60,7 @@ impl Default for AppSettings {
             port: DEFAULT_PORT,
             autostart: false,
             stop_services_on_exit: true,
+            rebuild_after_pull: true,
         }
     }
 }
@@ -215,7 +226,16 @@ pub fn t_log(locale: &str, key: &str, args: &[(&str, &str)]) -> String {
             ("process.port.held", "Could not stop the service: port {port} still accepts connections after every terminate attempt."),
             ("process.port.listeners", "Processes still listening on port {port}: {pids}"),
             ("process.stop.failed", "Failed to stop dsh web: {error}"),
+            ("process.start.exited", "The dsh service exited before it accepted connections on port {port}."),
+            ("process.start.timeout", "The dsh service did not accept connections on port {port} in time."),
             ("stream.read.failed", "Failed to read {source}: {error}"),
+            ("git.missing", "git was not found on PATH. Install Git, or add it to PATH and restart the launcher."),
+            ("pull.updated", "Repository updated ({before} → {after})."),
+            ("pull.uptodate", "Repository already up to date, so nothing needs rebuilding."),
+            ("pull.proxy.retry", "git pull failed; retrying through the system proxy {proxy}."),
+            ("pull.no.proxy", "git pull failed and no system proxy was found: {error}"),
+            ("pull.rebuild.start", "Rebuilding the service: stopping it, installing dependencies, building, then starting it again."),
+            ("pull.rebuild.skip", "Source updated; rebuild is off, so the service keeps running the previous build."),
         ]
     } else {
         &[
@@ -245,7 +265,16 @@ pub fn t_log(locale: &str, key: &str, args: &[(&str, &str)]) -> String {
             ("process.port.held", "无法停止服务：多轮终止后端口 {port} 仍可连接"),
             ("process.port.listeners", "仍在监听端口 {port} 的进程：{pids}"),
             ("process.stop.failed", "停止 dsh web 失败：{error}"),
+            ("process.start.exited", "dsh 服务在端口 {port} 接受连接前已退出"),
+            ("process.start.timeout", "dsh 服务未能在超时前于端口 {port} 接受连接"),
             ("stream.read.failed", "读取{source}失败：{error}"),
+            ("git.missing", "未在 PATH 中找到 git，请安装 Git 或将其加入 PATH 后重启启动器"),
+            ("pull.updated", "仓库已更新（{before} → {after}）"),
+            ("pull.uptodate", "仓库已是最新，无需重新构建"),
+            ("pull.proxy.retry", "git pull 失败，正在使用系统代理 {proxy} 重试"),
+            ("pull.no.proxy", "git pull 失败，且未找到可用的系统代理：{error}"),
+            ("pull.rebuild.start", "开始重新构建：停止服务、安装依赖、构建并重新启动服务"),
+            ("pull.rebuild.skip", "源码已更新，但未开启自动重构，运行中的服务仍使用旧构建"),
         ]
     };
     let mut message = dict.iter()

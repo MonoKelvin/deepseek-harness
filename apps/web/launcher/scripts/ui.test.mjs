@@ -31,7 +31,7 @@ async function pageFor(t, fixture = {}, viewport = { width: 620, height: 480 }) 
       calls: [],
       status: { state: 'stopped', port: 3080, url: null, pid: null, external: false, logEntries: [], error: null, ...fixture.status },
       statusError: fixture.statusError, hold: fixture.hold, reject: fixture.reject,
-      settings: { dshDirectory: 'C:\\code\\deepseek-harness', theme: 'system', locale: 'zh', port: 3080, autostart: false, stopServicesOnExit: true, ...fixture.settings },
+      settings: { dshDirectory: 'C:\\code\\deepseek-harness', theme: 'system', locale: 'zh', port: 3080, autostart: false, stopServicesOnExit: true, rebuildAfterPull: true, ...fixture.settings },
       failures: fixture.failures ?? {},
       pickedDirectory: fixture.pickedDirectory ?? null,
       directoryValid: fixture.directoryValid ?? true,
@@ -108,6 +108,10 @@ async function pageFor(t, fixture = {}, viewport = { width: 620, height: 480 }) 
           data.settings.port = args.port
           return structuredClone(data.settings)
         }
+        if (command === 'set_rebuild_after_pull') {
+          data.settings.rebuildAfterPull = args.enabled
+          return structuredClone(data.settings)
+        }
         if (command === 'get_status') {
           if (data.statusError) throw new Error(data.statusError)
           const status = structuredClone(data.status)
@@ -116,6 +120,14 @@ async function pageFor(t, fixture = {}, viewport = { width: 620, height: 480 }) 
         }
         if (data.hold) await new Promise((resolve) => { data.release = resolve })
         if (data.reject) throw new Error(data.reject)
+        // A successful start leaves a listening service behind, and the launcher
+        // opens that address in the same click. A held start stays silent so the
+        // pending state can be inspected before the service exists.
+        if (command === 'start_server') {
+          data.status.state = 'running-managed'
+          data.status.pid = data.status.pid ?? 4242
+          data.status.url = `http://127.0.0.1:${data.status.port}/`
+        }
         append('launcher', `Starting command: ${command}`)
         for (const [source, text] of [['stdout', data.output.stdout], ['stderr', data.output.stderr]]) {
           if (text) for (const line of text.trimEnd().split('\n')) append(source, line, source === 'stderr' ? 'warn' : 'info')
@@ -176,17 +188,52 @@ test('installation label expands and collapses without shifting the primary acti
   const start = await page.getByRole('button', { name: '启动服务', exact: true }).boundingBox()
   assert.ok(Math.abs(before.width - before.height) < 1)
   await install.hover()
-  await page.waitForFunction((width) => document.querySelector('.action-expand').getBoundingClientRect().width > width + 15, before.width)
+  await page.waitForFunction((width) => document.querySelector('button[aria-label="安装"]').getBoundingClientRect().width > width + 15, before.width)
   assert.deepEqual(await page.getByRole('button', { name: '启动服务', exact: true }).boundingBox(), start)
   await screenshot(page, 'action-expanded.png')
   await page.mouse.move(24, 24)
-  await page.waitForFunction((width) => Math.abs(document.querySelector('.action-expand').getBoundingClientRect().width - width) < 1, before.width)
+  await page.waitForFunction((width) => Math.abs(document.querySelector('button[aria-label="安装"]').getBoundingClientRect().width - width) < 1, before.width)
+})
+
+test('starting the service opens it in the same click, once it listens', async (t) => {
+  const page = await pageFor(t)
+  await page.getByRole('button', { name: '启动服务', exact: true }).click()
+  await page.waitForFunction(() => window.fixture.calls.some((call) => call.command === 'open_url'))
+  assert.equal((await callsFor(page, 'start_server')).length, 1)
+  assert.deepEqual((await callsFor(page, 'open_url'))[0].args, { url: 'http://127.0.0.1:3080/' })
+  await page.locator('.log-body').getByText('start_server succeeded', { exact: true }).waitFor()
+  await page.getByRole('button', { name: '打开DSH', exact: true }).waitFor()
+  await screenshot(page, 'start-opened-zh.png')
+})
+
+test('a pending start keeps the open control out of reach', async (t) => {
+  const page = await pageFor(t, { hold: true })
+  await page.getByRole('button', { name: '启动服务', exact: true }).click()
+  const start = page.getByRole('button', { name: '启动服务', exact: true })
+  await page.waitForFunction(() => document.querySelector('button[aria-busy="true"]') !== null)
+  assert.equal(await start.getAttribute('aria-busy'), 'true')
+  assert.equal(await start.isDisabled(), true)
+  assert.equal(await page.getByRole('button', { name: '打开DSH', exact: true }).count(), 0)
+  assert.equal((await callsFor(page, 'open_url')).length, 0)
+  await page.evaluate(() => window.fixture.release())
+  await page.getByRole('button', { name: '打开DSH', exact: true }).waitFor()
+  await page.waitForFunction(() => window.fixture.calls.some((call) => call.command === 'open_url'))
+})
+
+test('updating the repository runs the pipeline and reports it in the log', async (t) => {
+  const page = await pageFor(t, { output: { success: true, stdout: 'git pull\nAlready up to date.', stderr: '' } })
+  await page.getByRole('button', { name: '更新仓库', exact: true }).click()
+  await page.locator('.log-result').getByText('已完成', { exact: true }).waitFor()
+  assert.equal((await callsFor(page, 'update_repo')).length, 1)
+  await page.locator('.log-body').getByText('Already up to date.', { exact: true }).waitFor()
+  assert.equal(await page.getByRole('button', { name: '更新仓库', exact: true }).isDisabled(), false)
+  await screenshot(page, 'update-zh.png')
 })
 
 for (const state of ['starting', 'stopping']) {
   test(`${state} prevents conflicting actions`, async (t) => {
     const page = await pageFor(t, { status: { state } })
-    for (const name of ['启动服务', '安装', '构建']) assert.equal(await page.getByRole('button', { name, exact: true }).isDisabled(), true)
+    for (const name of ['启动服务', '更新仓库', '安装', '构建']) assert.equal(await page.getByRole('button', { name, exact: true }).isDisabled(), true)
   })
 }
 
@@ -347,7 +394,7 @@ test('autostart switch follows language, defaults off, and reports its change', 
   await page.getByRole('button', { name: '软件设置', exact: true }).click()
   assert.deepEqual(
     await page.locator('.setting-label > span, .setting-label > label').evaluateAll(labels => labels.map(label => label.textContent)),
-    ['DSH目录', '服务端口', '外观', '语言', '开机自启', '退出时停止服务'],
+    ['DSH目录', '服务端口', '外观', '语言', '开机自启', '退出时停止服务', '更新仓库后重构'],
   )
   const toggle = page.getByRole('switch', { name: '开机自启', exact: true })
   assert.equal(await toggle.getAttribute('aria-checked'), 'false')
@@ -367,6 +414,18 @@ test('stop-on-exit switch defaults on and reports its change', async (t) => {
   await page.waitForFunction(() => window.fixture.settings.stopServicesOnExit === false)
   assert.equal(await toggle.getAttribute('aria-checked'), 'false')
   assert.deepEqual((await callsFor(page, 'set_stop_services_on_exit')).at(-1).args, { enabled: false })
+})
+
+test('rebuild-after-update switch defaults on and reports its change', async (t) => {
+  const page = await pageFor(t)
+  await page.getByRole('button', { name: '软件设置', exact: true }).click()
+  const toggle = page.getByRole('switch', { name: '更新仓库后重构', exact: true })
+  assert.equal(await toggle.getAttribute('aria-checked'), 'true')
+  await toggle.click()
+  await page.waitForFunction(() => window.fixture.settings.rebuildAfterPull === false)
+  assert.equal(await toggle.getAttribute('aria-checked'), 'false')
+  assert.deepEqual((await callsFor(page, 'set_rebuild_after_pull')).at(-1).args, { enabled: false })
+  await screenshot(page, 'settings-rebuild-zh.png')
 })
 
 test('server port shows the persisted value, saves a valid edit, and rejects an invalid one', async (t) => {
@@ -461,8 +520,8 @@ for (const locale of ['zh', 'en']) {
     const page = await pageFor(t, { locale, settings: { dshDirectory: longPath } })
     await page.getByRole('button', { name: locale === 'zh' ? '软件设置' : 'Settings', exact: true }).click()
     assert.deepEqual(await page.locator('.setting-label').evaluateAll(labels => labels.map(label => label.innerText.split('\n').filter(Boolean))), locale === 'zh'
-      ? [['DSH目录', '设置DSH程序或者源码的路径'], ['服务端口', 'dsh 服务监听的端口'], ['外观', '软件的显示主题'], ['语言', '软件的显示语言'], ['开机自启', '是否开机自动静默运行软件'], ['退出时停止服务', '退出软件时一并停止服务']]
-      : [['DSH directory', 'Project root'], ['Server port', 'Port the dsh service listens on'], ['Appearance', 'Display theme'], ['Language', 'Display language'], ['Launch at startup', 'Auto-run the app silently on startup'], ['Stop on exit', 'Stop the service when the app exits']])
+      ? [['DSH目录', '设置DSH程序或者源码的路径'], ['服务端口', 'dsh 服务监听的端口'], ['外观', '软件的显示主题'], ['语言', '软件的显示语言'], ['开机自启', '是否开机自动静默运行软件'], ['退出时停止服务', '退出软件时一并停止服务'], ['更新仓库后重构', '更新后停止、构建并重启服务']]
+      : [['DSH directory', 'Project root'], ['Server port', 'Port the dsh service listens on'], ['Appearance', 'Display theme'], ['Language', 'Display language'], ['Launch at startup', 'Auto-run the app silently on startup'], ['Stop on exit', 'Stop the service when the app exits'], ['Rebuild after update', 'Stop, build, and restart on update']])
     assert.equal(await page.locator('.settings-app-version').innerText(), `v${metadata.version}`)
     assert.equal(await page.locator('.settings-app-description').innerText(), locale === 'zh'
       ? '一款用于启动、停止并监控本地 DeepSeek Harness Web端服务的工具软件。'

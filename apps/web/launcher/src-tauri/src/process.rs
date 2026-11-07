@@ -389,26 +389,40 @@ fn pnpm_command(_locale: &str) -> Result<String, String> {
   Ok("pnpm".to_string())
 }
 
-/// Stream a short-lived pnpm command into shared logs and retain its output for the result.
-pub async fn run_pnpm(args: &[&str], logs: &SharedLogBuffer, settings: &crate::state::AppSettings) -> CommandOutput {
+/// Stream a short-lived external command into shared logs and retain its output
+/// for the result.
+///
+/// `program` is the resolved executable, or the localized reason it cannot be
+/// located; `command` is the user-visible name in the start and result log
+/// entries, so the writer knows which step of a pipeline ran; `envs` adds
+/// environment for the child on top of the launcher's own.
+async fn run_tool(
+  program: Result<String, String>,
+  args: &[&str],
+  command: &str,
+  envs: &[(&str, &str)],
+  logs: &SharedLogBuffer,
+  settings: &crate::state::AppSettings,
+) -> CommandOutput {
   let locale = crate::state::current_locale(settings);
-  let command = format!("pnpm {}", args.join(" "));
-  append_log(logs, LogSource::Launcher, LogSeverity::Info, crate::state::t_log(&locale, "command.start", &[("command", &command)])).await;
-  let root = repo_root_from_settings(settings);
-  let pnpm = match pnpm_command(&locale) {
-    Ok(pnpm) => pnpm,
+  append_log(logs, LogSource::Launcher, LogSeverity::Info, crate::state::t_log(&locale, "command.start", &[("command", command)])).await;
+  let program = match program {
+    Ok(program) => program,
     Err(error) => {
-      log_command_result(logs, &locale, &command, Err(&error)).await;
+      log_command_result(logs, &locale, command, Err(&error)).await;
       return CommandOutput { success: false, stdout: String::new(), stderr: error };
     }
   };
-  let mut cmd = std::process::Command::new(&pnpm);
-  cmd.args(args).current_dir(&root).stdout(Stdio::piped()).stderr(Stdio::piped());
+  let mut cmd = std::process::Command::new(&program);
+  cmd.args(args).current_dir(repo_root_from_settings(settings)).stdout(Stdio::piped()).stderr(Stdio::piped());
+  for (name, value) in envs {
+    cmd.env(name, value);
+  }
   let mut child = match spawn_hidden(cmd) {
     Ok(child) => child,
     Err(error) => {
-      let error = format!("Failed to execute pnpm: {}", error);
-      log_command_result(logs, &locale, &command, Err(&error)).await;
+      let error = format!("Failed to execute {command}: {}", error);
+      log_command_result(logs, &locale, command, Err(&error)).await;
       return CommandOutput { success: false, stdout: String::new(), stderr: error };
     }
   };
@@ -433,7 +447,7 @@ pub async fn run_pnpm(args: &[&str], logs: &SharedLogBuffer, settings: &crate::s
     Ok(status) if !status.success() => {
       errors.push(format!("Command exited with code: {}", status.code().unwrap_or(-1)));
     }
-    Err(error) => errors.push(format!("Failed to wait for pnpm: {}", error)),
+    Err(error) => errors.push(format!("Failed to wait for {command}: {}", error)),
     Ok(_) => {}
   }
 
@@ -441,9 +455,192 @@ pub async fn run_pnpm(args: &[&str], logs: &SharedLogBuffer, settings: &crate::s
   let stdout = String::from_utf8_lossy(&stdout_bytes).into_owned();
   let stderr = String::from_utf8_lossy(&stderr_bytes).into_owned();
   let error = errors.join("; ");
-  log_command_result(logs, &locale, &command, if success { Ok(()) } else { Err(&error) }).await;
+  log_command_result(logs, &locale, command, if success { Ok(()) } else { Err(&error) }).await;
   let stderr = if !success && stderr.is_empty() { error } else { stderr };
   CommandOutput { success, stdout, stderr }
+}
+
+/// Stream a short-lived pnpm command into shared logs and retain its output for the result.
+pub async fn run_pnpm(args: &[&str], logs: &SharedLogBuffer, settings: &crate::state::AppSettings) -> CommandOutput {
+  let locale = crate::state::current_locale(settings);
+  run_tool(pnpm_command(&locale), args, &format!("pnpm {}", args.join(" ")), &[], logs, settings).await
+}
+
+/// Environment that keeps git non-interactive.
+///
+/// The launcher has no terminal, so a merge message that opens an editor, or a
+/// credential prompt with no tty, would block the pull until the user finds the
+/// window it is waiting behind. The OS credential manager still runs.
+const GIT_ENV: &[(&str, &str)] = &[
+  ("GIT_TERMINAL_PROMPT", "0"),
+  ("GIT_MERGE_AUTOEDIT", "no"),
+  ("GIT_EDITOR", "true"),
+];
+
+/// Build the command that runs git, or a localized reason git cannot be located.
+#[cfg(target_os = "windows")]
+pub fn git_command(locale: &str) -> Result<String, String> {
+  let search_path = std::env::var_os("PATH").unwrap_or_default();
+  let extensions = std::env::var("PATHEXT").unwrap_or_else(|_| DEFAULT_PATHEXT.to_string());
+  let program = resolve_in_path("git", &search_path, &extensions)
+    .ok_or_else(|| crate::state::t_log(locale, "git.missing", &[]))?;
+
+  Ok(program.to_string_lossy().to_string())
+}
+
+/// Build the command that runs git. `PATH` lookup needs no suffix handling here,
+/// so an unresolvable name surfaces as the spawn error.
+#[cfg(not(target_os = "windows"))]
+pub fn git_command(_locale: &str) -> Result<String, String> {
+  Ok("git".to_string())
+}
+
+/// Stream a git command into shared logs and retain its output for the result.
+pub async fn run_git(args: &[&str], logs: &SharedLogBuffer, settings: &crate::state::AppSettings) -> CommandOutput {
+  let locale = crate::state::current_locale(settings);
+  run_tool(git_command(&locale), args, &format!("git {}", args.join(" ")), GIT_ENV, logs, settings).await
+}
+
+/// Read one git value without writing to the run log, for the pull's
+/// before/after comparison where the extra command lines would be noise.
+pub async fn git_capture(program: &str, args: &[&str], root: &str) -> Option<String> {
+  let mut cmd = std::process::Command::new(program);
+  cmd.args(args).current_dir(root).stdout(Stdio::piped()).stderr(Stdio::null());
+  let output = spawn_hidden(cmd).ok()?.wait_with_output().await.ok()?;
+  if !output.status.success() {
+    return None;
+  }
+  Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// A proxy this machine is configured to use, for retrying a failed git fetch.
+///
+/// Environment variables come first: they are explicit for the environment the
+/// launcher runs in. The Windows Internet Settings entry is what the system and
+/// its browsers use, so it covers a proxy the user configured only through a
+/// proxy client.
+pub async fn system_proxy() -> Option<String> {
+  for name in ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"] {
+    if let Ok(value) = std::env::var(name) {
+      if let Some(proxy) = normalize_proxy(&value) {
+        return Some(proxy);
+      }
+    }
+  }
+  #[cfg(target_os = "windows")]
+  {
+    if let Some(proxy) = windows_internet_proxy().await {
+      return Some(proxy);
+    }
+  }
+  None
+}
+
+/// Normalize a configured proxy value into a URL git accepts, or `None` when it
+/// names no proxy.
+///
+/// Windows stores a single proxy as `host:port` and a per-protocol list as
+/// `http=host:port;https=host:port`; both lose the scheme, which git requires.
+fn normalize_proxy(value: &str) -> Option<String> {
+  let trimmed = value.trim().trim_matches('"').trim();
+  if trimmed.is_empty() {
+    return None;
+  }
+  if trimmed.contains("://") {
+    return Some(trimmed.to_string());
+  }
+  let host = if trimmed.contains('=') { proxy_from_list(trimmed)? } else { trimmed.to_string() };
+  Some(format!("http://{host}"))
+}
+
+/// Pick the https entry of a `scheme=host:port` proxy list, falling back to the
+/// http entry, for a fetch against an HTTPS remote.
+fn proxy_from_list(value: &str) -> Option<String> {
+  let mut https = None;
+  let mut http = None;
+  for entry in value.split(';') {
+    let Some((scheme, host)) = entry.split_once('=') else { continue };
+    let host = host.trim();
+    if host.is_empty() {
+      continue;
+    }
+    match scheme.trim().to_ascii_lowercase().as_str() {
+      "https" => https = Some(host.to_string()),
+      "http" => http = Some(host.to_string()),
+      _ => {}
+    }
+  }
+  https.or(http)
+}
+
+/// Read the proxy the user configured in Windows Internet Settings.
+///
+/// `reg query` is used rather than the registry API because the launcher's
+/// `windows` crate features carry no registry access, and the value names are
+/// not localized.
+#[cfg(target_os = "windows")]
+async fn windows_internet_proxy() -> Option<String> {
+  const KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings";
+  let enable = reg_query(KEY, "ProxyEnable").await?;
+  if registry_value(&enable, "ProxyEnable")? == "0x0" {
+    return None;
+  }
+  let server = reg_query(KEY, "ProxyServer").await?;
+  normalize_proxy(&registry_value(&server, "ProxyServer")?)
+}
+
+/// Run `reg query <key> /v <name>` and return its stdout.
+#[cfg(target_os = "windows")]
+async fn reg_query(key: &str, name: &str) -> Option<String> {
+  let mut cmd = std::process::Command::new("reg");
+  cmd.args(["query", key, "/v", name]).stdout(Stdio::piped()).stderr(Stdio::null());
+  let output = spawn_hidden(cmd).ok()?.wait_with_output().await.ok()?;
+  if !output.status.success() {
+    return None;
+  }
+  Some(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Read one value out of `reg query` output. A value line is
+/// `<name> <type> <data>`, and the proxy entries read here hold no spaces in
+/// their data.
+#[cfg(target_os = "windows")]
+fn registry_value(output: &str, name: &str) -> Option<String> {
+  output.lines().find_map(|line| {
+    let mut columns = line.split_whitespace();
+    if columns.next()? != name {
+      return None;
+    }
+    // Skip the value type (`REG_SZ`, `REG_DWORD`, ...).
+    columns.next()?;
+    let data = columns.next()?;
+    if data.is_empty() { None } else { Some(data.to_string()) }
+  })
+}
+
+/// Wait for `port` to accept connections after a start, failing early when the
+/// managed child exits on its own.
+///
+/// The manager lock is taken only to check the child, so status polls are still
+/// served while a cold server boots.
+pub async fn await_started_server(shared: &SharedManager, port: u16, locale: &str, timeout: Duration) -> Result<(), String> {
+  let deadline = Instant::now() + timeout;
+  loop {
+    if is_port_open(port).await {
+      return Ok(());
+    }
+    let alive = {
+      let mut manager = shared.lock().await;
+      reap_if_exited(&mut manager)
+    };
+    if !alive {
+      return Err(crate::state::t_log(locale, "process.start.exited", &[("port", &port.to_string())]));
+    }
+    if Instant::now() >= deadline {
+      return Err(crate::state::t_log(locale, "process.start.timeout", &[("port", &port.to_string())]));
+    }
+    tokio::time::sleep(Duration::from_millis(100)).await;
+  }
 }
 
 /// Spawn `pnpm dsh web` and drain both output pipes concurrently.
@@ -818,14 +1015,21 @@ pub async fn build_status(shared: &SharedManager, dsh_directory_valid: bool, por
     (alive, manager.pid, manager.logs.clone())
   };
   let port_open = is_port_open(port).await;
-  let (state, external, pid) = if managed_alive {
+  let (state, external, pid) = if managed_alive && port_open {
     (ServerState::RunningManaged, false, managed_pid)
+  } else if managed_alive {
+    // A live child that does not accept connections yet is still starting.
+    // Reporting it as running would hand the UI an address that refuses
+    // connections, which is exactly what a click on open must not reach.
+    (ServerState::Starting, false, managed_pid)
   } else if port_open {
     (ServerState::RunningExternal, true, None)
   } else {
     (ServerState::Stopped, false, None)
   };
-  let url = if state != ServerState::Stopped {
+  // The address is only meaningful once something accepts connections on the
+  // port, so the open action stays unavailable until then.
+  let url = if port_open {
     Some(format!("http://{DEFAULT_HOST}:{port}/"))
   } else {
     None
@@ -1033,6 +1237,7 @@ mod tests {
       port,
       autostart: false,
       stop_services_on_exit: true,
+      rebuild_after_pull: true,
     };
     stop_dsh_web(&mut manager, &settings).await.expect("the stop frees the port");
     assert!(settles_to_port(port, false).await, "the port owner stopped");
@@ -1070,5 +1275,39 @@ mod tests {
 
     let _ = child.wait().await;
     let _ = std::fs::remove_dir_all(&dir);
+  }
+
+  #[test]
+  fn proxy_values_gain_the_scheme_git_requires() {
+    assert_eq!(normalize_proxy("127.0.0.1:7890").as_deref(), Some("http://127.0.0.1:7890"));
+    assert_eq!(normalize_proxy("  \"127.0.0.1:7890\"  ").as_deref(), Some("http://127.0.0.1:7890"));
+    assert_eq!(normalize_proxy("socks5://127.0.0.1:1080").as_deref(), Some("socks5://127.0.0.1:1080"));
+    assert_eq!(normalize_proxy("   "), None);
+    assert_eq!(normalize_proxy(""), None);
+  }
+
+  #[test]
+  fn proxy_lists_prefer_the_https_entry() {
+    assert_eq!(normalize_proxy("http=proxy:8080;https=secure:8443").as_deref(), Some("http://secure:8443"));
+    assert_eq!(normalize_proxy("http=proxy:8080").as_deref(), Some("http://proxy:8080"));
+    assert_eq!(normalize_proxy("ftp=proxy:21"), None);
+  }
+
+  #[cfg(target_os = "windows")]
+  #[test]
+  fn registry_output_is_read_by_value_name() {
+    let output = "\r\nHKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings\r\n    ProxyEnable    REG_DWORD    0x1\r\n    ProxyServer    REG_SZ    proxy:8080\r\n\r\n";
+    assert_eq!(registry_value(output, "ProxyEnable").as_deref(), Some("0x1"));
+    assert_eq!(registry_value(output, "ProxyServer").as_deref(), Some("proxy:8080"));
+    assert_eq!(registry_value(output, "ProxyOverride"), None);
+  }
+
+  #[tokio::test]
+  async fn a_start_with_no_listener_reports_a_failure() {
+    let manager: SharedManager = std::sync::Arc::new(tokio::sync::Mutex::new(ServerManager::new()));
+    let error = await_started_server(&manager, 1, "en", Duration::from_millis(300))
+      .await
+      .expect_err("a start with no child and no listener cannot succeed");
+    assert!(error.contains("exited"), "{error}");
   }
 }

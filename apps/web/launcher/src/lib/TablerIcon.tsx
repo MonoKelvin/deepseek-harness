@@ -3,6 +3,7 @@ import { cn } from './utils'
 import {
   IconAlertTriangle,
   IconCheck,
+  IconCloudDownload,
   IconCopy,
   IconExternalLink,
   IconFolder,
@@ -31,6 +32,7 @@ const icons = {
   refresh: IconRefresh,
   restart: IconRotateClockwise,
   trash: IconTrash,
+  update: IconCloudDownload,
   x: IconX,
 } as const
 

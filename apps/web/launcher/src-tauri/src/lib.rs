@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::PathBuf;
+use std::time::Duration;
 
 use tauri::{
   menu::{Menu, MenuItem},
@@ -225,8 +226,9 @@ fn reveal_existing_window(_pid: u32) -> bool {
 }
 
 use process::{
-  append_log, attach_log_emitter, build_status, clear_logs as clear_log_buffer, log_command_result, run_pnpm,
-  start_dsh_web, stop_dsh_web,
+  append_log, attach_log_emitter, await_started_server, build_status, clear_logs as clear_log_buffer,
+  git_capture, git_command, log_command_result, repo_root_from_settings, run_git, run_pnpm,
+  start_dsh_web, stop_dsh_web, system_proxy,
   CommandOutput, LogSeverity, LogSource, ServerManager, ServerStatusInfo, SharedLogBuffer,
   SharedManager,
 };
@@ -378,19 +380,47 @@ async fn install_deps(state: State<'_, AppState>) -> Result<CommandOutput, Strin
   Ok(run_pnpm(&["install"], &state.logs, &settings).await)
 }
 
+/// Build the frontend through the root script, which keeps the launcher's build
+/// step identical to the one the repository documents and maintains. Building
+/// the package directly skips whatever else that script grows to cover.
 #[tauri::command]
 async fn build_frontend(state: State<'_, AppState>) -> Result<CommandOutput, String> {
   let settings = state.settings.lock().await.clone();
-  Ok(run_pnpm(&["--filter", "@deepseek-ai/dsh-web-frontend", "build"], &state.logs, &settings).await)
+  Ok(run_pnpm(&["run", "build:web"], &state.logs, &settings).await)
+}
+
+/// How long a start waits for the server to accept connections before it is
+/// reported as failed. A first start from source compiles the TypeScript entry
+/// graph through tsx, which is slow enough on a cold cache that a short wait
+/// would fail a start that was still coming up.
+const START_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Start the managed server and wait until it accepts connections.
+///
+/// A start that resolves before the port is open hands the caller an address it
+/// cannot reach, which is what a click on open would then load. The wait is
+/// therefore part of the start, and a start that never listens stops its own
+/// half-started tree instead of leaving a server the launcher does not report.
+async fn start_and_await(state: &AppState, settings: &AppSettings) -> Result<u32, String> {
+  let pid = {
+    let mut manager = state.manager.lock().await;
+    start_dsh_web(&mut manager, settings).await?
+  };
+  let locale = state::current_locale(settings);
+  if let Err(error) = await_started_server(&state.manager, settings.port, locale, START_TIMEOUT).await {
+    let mut manager = state.manager.lock().await;
+    let _ = stop_dsh_web(&mut manager, settings).await;
+    return Err(error);
+  }
+  Ok(pid)
 }
 
 #[tauri::command]
 async fn start_server(state: State<'_, AppState>) -> Result<CommandOutput, String> {
   let settings = state.settings.lock().await.clone();
   let locale = state::current_locale(&settings);
-  let mut manager = state.manager.lock().await;
-  match start_dsh_web(&mut manager, &settings).await {
-    Ok(pid) => Ok(CommandOutput { success: true, stdout: state::t_log(&locale, "process.started", &[("pid", &pid.to_string())]), stderr: String::new() }),
+  match start_and_await(&state, &settings).await {
+    Ok(pid) => Ok(CommandOutput { success: true, stdout: state::t_log(locale, "process.started", &[("pid", &pid.to_string())]), stderr: String::new() }),
     Err(error) => Ok(CommandOutput { success: false, stdout: String::new(), stderr: error }),
   }
 }
@@ -409,12 +439,106 @@ async fn stop_server(state: State<'_, AppState>) -> Result<CommandOutput, String
 async fn restart_server(state: State<'_, AppState>) -> Result<CommandOutput, String> {
   let settings = state.settings.lock().await.clone();
   let locale = state::current_locale(&settings);
-  let mut manager = state.manager.lock().await;
-  if let Err(error) = stop_dsh_web(&mut manager, &settings).await {
-    return Ok(CommandOutput { success: false, stdout: String::new(), stderr: error });
+  {
+    let mut manager = state.manager.lock().await;
+    if let Err(error) = stop_dsh_web(&mut manager, &settings).await {
+      return Ok(CommandOutput { success: false, stdout: String::new(), stderr: error });
+    }
   }
-  match start_dsh_web(&mut manager, &settings).await {
-    Ok(pid) => Ok(CommandOutput { success: true, stdout: state::t_log(&locale, "process.restarted", &[("pid", &pid.to_string())]), stderr: String::new() }),
+  match start_and_await(&state, &settings).await {
+    Ok(pid) => Ok(CommandOutput { success: true, stdout: state::t_log(locale, "process.restarted", &[("pid", &pid.to_string())]), stderr: String::new() }),
+    Err(error) => Ok(CommandOutput { success: false, stdout: String::new(), stderr: error }),
+  }
+}
+
+/// The most useful text from a failed command, for a message with room for one
+/// field. The last line of stderr is where git and pnpm print their reason.
+fn failure_detail(output: &CommandOutput) -> String {
+  let detail = if output.stderr.trim().is_empty() { &output.stdout } else { &output.stderr };
+  detail.trim().lines().last().unwrap_or_default().to_string()
+}
+
+/// The abbreviated form of a full commit revision.
+fn short_revision(revision: &str) -> String {
+  revision.chars().take(7).collect()
+}
+
+/// Persist whether pulling new source immediately rebuilds and restarts the service.
+#[tauri::command]
+async fn set_rebuild_after_pull(state: State<'_, AppState>, app_handle: AppHandle, enabled: bool) -> Result<AppSettings, String> {
+  let result = {
+    let mut settings = state.settings.lock().await;
+    settings.rebuild_after_pull = enabled;
+    settings.clone()
+  };
+  save_settings(&app_handle, &result);
+  Ok(result)
+}
+
+/// Pull the latest source into the DSH root and, when the pull brought a new
+/// commit and the rebuild setting is on, stop the service, install, build, and
+/// start it again.
+///
+/// The sequence runs here rather than in the UI because only the backend stops
+/// and starts the service, and because every step streams to the run log while
+/// it runs. A pull that brought no new commit changes nothing on disk, so the
+/// rebuild is skipped even when it is enabled. A rebuild step that fails leaves
+/// the service stopped: the tree no longer matches a build, and reporting a
+/// restart of an unverified build would hide that.
+#[tauri::command]
+async fn update_repo(state: State<'_, AppState>) -> Result<CommandOutput, String> {
+  let settings = state.settings.lock().await.clone();
+  let locale = state::current_locale(&settings);
+  let root = repo_root_from_settings(&settings);
+  let git = match git_command(locale) {
+    Ok(git) => git,
+    Err(error) => return Ok(CommandOutput { success: false, stdout: String::new(), stderr: error }),
+  };
+  let before = git_capture(&git, &["rev-parse", "HEAD"], &root).await.unwrap_or_default();
+  let pull = run_git(&["pull"], &state.logs, &settings).await;
+  let pull = if pull.success {
+    pull
+  } else if let Some(proxy) = system_proxy().await {
+    // A failed fetch is often a proxy the launcher's environment does not carry;
+    // the retry makes the system's own proxy setting available to git.
+    append_log(&state.logs, LogSource::Launcher, LogSeverity::Info, state::t_log(locale, "pull.proxy.retry", &[("proxy", &proxy)])).await;
+    let http = format!("http.proxy={proxy}");
+    let https = format!("https.proxy={proxy}");
+    run_git(&["-c", &http, "-c", &https, "pull"], &state.logs, &settings).await
+  } else {
+    let error = failure_detail(&pull);
+    append_log(&state.logs, LogSource::Launcher, LogSeverity::Warn, state::t_log(locale, "pull.no.proxy", &[("error", &error)])).await;
+    pull
+  };
+  let after = git_capture(&git, &["rev-parse", "HEAD"], &root).await.unwrap_or_default();
+  if before.is_empty() || after.is_empty() || before == after {
+    if pull.success {
+      append_log(&state.logs, LogSource::Launcher, LogSeverity::Info, state::t_log(locale, "pull.uptodate", &[])).await;
+    }
+    return Ok(pull);
+  }
+  append_log(&state.logs, LogSource::Launcher, LogSeverity::Info, state::t_log(locale, "pull.updated", &[("before", &short_revision(&before)), ("after", &short_revision(&after))])).await;
+  if !settings.rebuild_after_pull {
+    append_log(&state.logs, LogSource::Launcher, LogSeverity::Info, state::t_log(locale, "pull.rebuild.skip", &[])).await;
+    return Ok(pull);
+  }
+  append_log(&state.logs, LogSource::Launcher, LogSeverity::Info, state::t_log(locale, "pull.rebuild.start", &[])).await;
+  {
+    let mut manager = state.manager.lock().await;
+    if let Err(error) = stop_dsh_web(&mut manager, &settings).await {
+      return Ok(CommandOutput { success: false, stdout: String::new(), stderr: error });
+    }
+  }
+  let install = run_pnpm(&["install"], &state.logs, &settings).await;
+  if !install.success {
+    return Ok(install);
+  }
+  let build = run_pnpm(&["run", "build:web"], &state.logs, &settings).await;
+  if !build.success {
+    return Ok(build);
+  }
+  match start_and_await(&state, &settings).await {
+    Ok(pid) => Ok(CommandOutput { success: true, stdout: state::t_log(locale, "process.restarted", &[("pid", &pid.to_string())]), stderr: String::new() }),
     Err(error) => Ok(CommandOutput { success: false, stdout: String::new(), stderr: error }),
   }
 }
@@ -751,7 +875,7 @@ pub fn run() {
       get_status, get_settings, set_dsh_directory, set_theme, set_locale, set_autostart, clear_logs,
       open_directory_picker, is_autostart_launch,
       install_deps, build_frontend, start_server, stop_server, restart_server, open_url,
-      set_stop_services_on_exit, set_server_port
+      update_repo, set_stop_services_on_exit, set_server_port, set_rebuild_after_pull
     ])
     .build(tauri::generate_context!())
     .expect("error building tauri app");

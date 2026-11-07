@@ -49,6 +49,11 @@ export async function setServerPort(port: number): Promise<AppSettings> {
   return invoke<AppSettings>('set_server_port', { port })
 }
 
+/** Persist whether pulling new code immediately rebuilds and restarts the service. */
+export async function setRebuildAfterPull(enabled: boolean): Promise<AppSettings> {
+  return invoke<AppSettings>('set_rebuild_after_pull', { enabled })
+}
+
 /** Clear the backend log buffer without resetting entry IDs. */
 export async function clearLogs(): Promise<void> {
   await invoke('clear_logs')
@@ -87,6 +92,11 @@ export function stopServer(): Promise<CommandOutput> {
 /** Restart the managed dsh web server process. */
 export function restartServer(): Promise<CommandOutput> {
   return invoke<CommandOutput>('restart_server')
+}
+
+/** Pull the latest source, rebuilding and restarting the service when enabled. */
+export function updateRepo(): Promise<CommandOutput> {
+  return invoke<CommandOutput>('update_repo')
 }
 
 /** Open a URL in the user's default browser via the launcher backend. */

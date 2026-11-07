@@ -36,10 +36,11 @@
 
 ## ✨ Features
 
-- 🟢 **One-click lifecycle** — the main button adapts to state (Start → Open → Restart / Stop); Install and Build are available while the service is stopped.
+- 🟢 **One-click lifecycle** — the main button adapts to state (Start → Open → Restart / Stop); a start opens the service in the browser once it accepts connections, so the page never loads before the server is up, and Install and Build stay available while it is stopped.
+- 🔄 **Update in place** — pulls the latest source with `git` (retrying through the system proxy when the pull fails) and, when new commits arrive, stops the service, installs dependencies, builds, and starts it again.
 - 🔌 **External-service aware** — a server started by another program on port `3080` can also be opened, restarted, or stopped (shown as *external*).
 - 📜 **Unified live log** — backend, frontend, and IPC messages stream into one view; warnings and errors stay in the log (no dialogs or toasts), with Copy and Clear in the toolbar.
-- ⚙️ **Persisted settings** — project directory, server port, theme, language, launch-at-startup (off by default), and stop-on-exit (on by default; stops the dsh service running on the configured port when the launcher quits).
+- ⚙️ **Persisted settings** — project directory, server port, theme, language, launch-at-startup (off by default), stop-on-exit (on by default; stops the dsh service running on the configured port when the launcher quits), and rebuild-after-update (on by default).
 - 🖥️ **System tray** — closing the window hides it to the tray; quit from there.
 - 🌏 **Bilingual UI** — Simplified Chinese and English.
 
@@ -152,6 +153,8 @@ npm run test:ui
 
 - **Port** — `dsh web` listens on `http://127.0.0.1:3080` by default. If yours differs, set it in Settings → Server port so the launcher watches, opens, and stops the right one.
 - **pnpm required** — service and dependency operations run `pnpm` in the DSH project root, so pnpm must be installed and on `PATH`.
+- **Build step** — Build runs the repository's documented `pnpm run build:web` in the DSH project root, which is what the service needs after a source update.
+- **git required for updates** — Update runs `git pull` in the DSH project root. A failed pull is retried once through the system proxy (the `HTTPS_PROXY`/`HTTP_PROXY` environment variables, or the Windows Internet Settings proxy).
 
 ## 📄 License
 
